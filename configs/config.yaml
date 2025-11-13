@@ -1,0 +1,278 @@
+# Dating Profile Matcher Configuration
+
+# Project Info
+project:
+  name: "dating-profile-matcher"
+  version: "1.0.0"
+  description: "Profile feature extraction for dating app matching"
+
+# Paths
+paths:
+  data_root: "data"
+  raw_data: "data/raw/profiles"
+  processed_data: "data/processed"
+  augmented_data: "data/augmented"
+  metadata: "data/raw/metadata.csv"
+  interactions: "data/raw/interactions.csv"
+
+  model_dir: "models"
+  checkpoint_dir: "models/checkpoints"
+  saved_models: "models/saved_models"
+
+  logs_dir: "logs"
+  tensorboard_dir: "logs/tensorboard"
+
+# Data
+data:
+  image_size: 224
+  num_workers: 4
+  pin_memory: true
+
+  # Data split
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  random_seed: 42
+
+  # Augmentation
+  augmentation:
+    enabled: true
+    horizontal_flip: 0.5
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    gaussian_blur: 0.3
+    random_crop_scale: [0.8, 1.0]
+
+  # Face detection
+  face_detection:
+    enabled: true
+    detector: "mtcnn"  # Options: mtcnn, retinaface
+    min_face_size: 50
+    min_confidence: 0.8
+    alignment: true
+
+# Model Architecture
+model:
+  backbone: "efficientnet_b0"  # Options: efficientnet_b0, resnet50, vit_base
+  pretrained: true
+  embedding_dim: 512
+  dropout: 0.3
+
+  # Normalization
+  normalize_embeddings: true
+
+  # Feature extraction
+  feature_dim: 1280  # EfficientNet-B0 output
+
+  # Additional heads (multi-task learning)
+  multi_task:
+    enabled: false
+    tasks:
+      - name: "age_prediction"
+        num_classes: 10  # Age bins
+        weight: 0.2
+      - name: "style_classification"
+        num_classes: 5  # Casual, formal, etc.
+        weight: 0.1
+
+# Training
+training:
+  # Basic settings
+  batch_size: 32
+  num_epochs: 50
+  learning_rate: 1e-4
+  weight_decay: 1e-4
+
+  # Optimizer
+  optimizer: "adam"  # Options: adam, adamw, sgd
+  momentum: 0.9  # For SGD
+
+  # Learning rate scheduler
+  scheduler:
+    type: "cosine"  # Options: cosine, step, plateau
+    warmup_epochs: 5
+    min_lr: 1e-6
+
+    # For step scheduler
+    step_size: 10
+    gamma: 0.1
+
+    # For plateau scheduler
+    patience: 5
+    factor: 0.5
+
+  # Loss function
+  loss:
+    type: "triplet"  # Options: triplet, contrastive, arcface
+    margin: 0.5
+
+    # For ArcFace
+    scale: 30.0
+    margin_arcface: 0.5
+
+  # Triplet sampling
+  triplet:
+    strategy: "batch_hard"  # Options: batch_hard, batch_all, online
+    samples_per_class: 4
+
+  # Training stages
+  stages:
+    - name: "warmup"
+      epochs: 5
+      freeze_backbone: true
+      lr: 1e-3
+
+    - name: "fine_tune"
+      epochs: 20
+      freeze_backbone: false
+      lr: 1e-4
+
+    - name: "refinement"
+      epochs: 25
+      freeze_backbone: false
+      lr: 1e-5
+      hard_negative_mining: true
+
+  # Gradient clipping
+  gradient_clip_val: 1.0
+
+  # Mixed precision
+  mixed_precision: true
+
+  # Checkpoint
+  save_top_k: 3
+  monitor: "val_loss"
+  mode: "min"
+  save_every_n_epochs: 5
+
+# Validation
+validation:
+  batch_size: 64
+  eval_every_n_epochs: 1
+
+  # Metrics
+  metrics:
+    - "triplet_loss"
+    - "embedding_quality"
+    - "retrieval_accuracy"
+    - "intra_class_distance"
+    - "inter_class_distance"
+
+  # Retrieval evaluation
+  retrieval:
+    top_k: [1, 5, 10, 20]
+    distance_metric: "cosine"  # Options: cosine, euclidean
+
+# Inference
+inference:
+  batch_size: 64
+  device: "cuda"  # Options: cuda, cpu
+  num_workers: 2
+
+  # Vector database
+  vector_db:
+    type: "faiss"  # Options: faiss, milvus, pinecone
+    index_type: "IVF"  # Options: Flat, IVF, HNSW
+    nlist: 100  # For IVF
+    nprobe: 10  # Search parameter
+
+    # Quantization
+    use_pq: true
+    pq_m: 8
+    pq_nbits: 8
+
+  # Matching
+  matching:
+    top_k: 10
+    min_similarity: 0.5
+    diversity_weight: 0.2  # MMR diversity
+
+    # Personalization
+    personalization:
+      enabled: true
+      feedback_weight: 0.3  # Blend with base embedding
+      min_interactions: 5  # Minimum interactions before personalization
+
+# Logging
+logging:
+  level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR
+  log_to_file: true
+  log_file: "logs/training.log"
+
+  # Experiment tracking
+  wandb:
+    enabled: true
+    project: "dating-profile-matcher"
+    entity: null  # Your wandb username/team
+    tags: ["baseline", "efficientnet"]
+
+  # MLflow (alternative)
+  mlflow:
+    enabled: false
+    tracking_uri: "http://localhost:5000"
+    experiment_name: "dating-matcher"
+
+# Hardware
+hardware:
+  device: "cuda"  # Options: cuda, cpu, mps (for Mac M1/M2)
+  gpu_ids: [0]  # Multi-GPU: [0, 1, 2, 3]
+  distributed: false
+
+  # Performance optimization
+  cudnn_benchmark: true
+  deterministic: false
+
+# Reproducibility
+reproducibility:
+  seed: 42
+  deterministic_mode: false  # Set to true for exact reproducibility (slower)
+
+# API Server
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  reload: false  # Set to true for development
+
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    max_requests: 100
+    window: 60  # seconds
+
+  # CORS
+  cors:
+    enabled: true
+    allow_origins: ["*"]
+    allow_methods: ["GET", "POST"]
+
+  # Authentication
+  auth:
+    enabled: false
+    jwt_secret: "your-secret-key-here"  # Change in production
+    token_expiry: 3600  # seconds
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: false
+    port: 9090
+
+  sentry:
+    enabled: false
+    dsn: null  # Your Sentry DSN
+
+# Data Privacy
+privacy:
+  anonymize_user_ids: true
+  remove_exif: true
+  encrypt_at_rest: false  # Enable in production
+
+  # GDPR compliance
+  gdpr:
+    allow_data_export: true
+    allow_data_deletion: true
+    retention_days: 365

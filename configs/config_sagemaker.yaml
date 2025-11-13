@@ -1,0 +1,285 @@
+# SageMaker AI Studio Configuration for Dating Profile Matcher
+
+# Project Info
+project:
+  name: "dating-profile-matcher-sagemaker"
+  version: "1.0.0"
+  description: "Profile feature extraction using Qwen3-VL on SageMaker"
+
+# SageMaker Paths (adjust based on your setup)
+paths:
+  # SageMaker default paths
+  sagemaker_base: "/opt/ml"
+  input_data: "/opt/ml/input/data"
+  model_dir: "/opt/ml/model"
+  output_data: "/opt/ml/output"
+  checkpoints: "/opt/ml/checkpoints"
+
+  # S3 paths (set via environment variables or parameters)
+  s3_bucket: "s3://your-bucket-name"  # Change this
+  s3_data_prefix: "dating-matcher/data"
+  s3_model_prefix: "dating-matcher/models"
+  s3_output_prefix: "dating-matcher/output"
+
+  # Local paths for SageMaker Studio
+  data_root: "~/SageMaker/dating-matcher/data"
+  raw_data: "~/SageMaker/dating-matcher/data/raw"
+  processed_data: "~/SageMaker/dating-matcher/data/processed"
+  metadata: "~/SageMaker/dating-matcher/data/raw/metadata.csv"
+  interactions: "~/SageMaker/dating-matcher/data/raw/interactions.csv"
+
+  logs_dir: "~/SageMaker/dating-matcher/logs"
+  tensorboard_dir: "~/SageMaker/dating-matcher/logs/tensorboard"
+
+# Data
+data:
+  image_size: 224
+  num_workers: 4  # Adjust based on instance type
+  pin_memory: true
+
+  # Data split
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  random_seed: 42
+
+  # Augmentation
+  augmentation:
+    enabled: true
+    horizontal_flip: 0.5
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    gaussian_blur: 0.3
+    random_crop_scale: [0.8, 1.0]
+
+# Model Architecture - Qwen3-VL
+model:
+  type: "qwen3vl"  # Use Qwen3-VL instead of standard CNN
+  model_name: "Qwen/Qwen3-VL-2B-Instruct-FP8"
+
+  # Feature extraction settings
+  embedding_dim: 512
+  freeze_vision_encoder: true  # Start with frozen, unfreeze later
+  use_projection_head: true
+
+  # Normalization
+  normalize_embeddings: true
+
+  # Multimodal settings
+  use_text_features: false  # Set to true to use profile descriptions
+  vision_text_weight: [0.7, 0.3]  # Weights for vision and text
+
+# Training
+training:
+  # Basic settings
+  batch_size: 16  # Smaller batch for large VLM
+  num_epochs: 30
+  learning_rate: 5e-5  # Lower LR for fine-tuning
+  weight_decay: 1e-4
+
+  # Optimizer
+  optimizer: "adamw"  # AdamW recommended for transformers
+  momentum: 0.9
+
+  # Learning rate scheduler
+  scheduler:
+    type: "cosine"
+    warmup_epochs: 3
+    min_lr: 1e-6
+
+  # Loss function
+  loss:
+    type: "online_triplet"  # Online triplet mining
+    margin: 0.5
+
+  # Triplet sampling
+  triplet:
+    strategy: "batch_hard"
+    samples_per_class: 4
+
+  # Training stages
+  stages:
+    - name: "warmup"
+      epochs: 5
+      freeze_vision_encoder: true
+      lr: 5e-5
+
+    - name: "fine_tune"
+      epochs: 15
+      freeze_vision_encoder: false
+      lr: 2e-5
+
+    - name: "refinement"
+      epochs: 10
+      freeze_vision_encoder: false
+      lr: 1e-5
+
+  # Gradient settings
+  gradient_clip_val: 1.0
+  gradient_accumulation_steps: 2  # Effective batch size = 16 * 2 = 32
+
+  # Mixed precision
+  mixed_precision: true
+
+  # Checkpoint
+  save_top_k: 3
+  monitor: "val_loss"
+  mode: "min"
+  save_every_n_epochs: 5
+
+# Validation
+validation:
+  batch_size: 32
+  eval_every_n_epochs: 1
+
+  metrics:
+    - "triplet_loss"
+    - "embedding_quality"
+    - "retrieval_accuracy"
+    - "intra_class_distance"
+    - "inter_class_distance"
+
+  retrieval:
+    top_k: [1, 5, 10, 20]
+    distance_metric: "cosine"
+
+# Inference
+inference:
+  batch_size: 32
+  device: "cuda"
+  num_workers: 2
+
+  # Vector database
+  vector_db:
+    type: "faiss"
+    index_type: "IVF"
+    nlist: 100
+    nprobe: 10
+
+    use_pq: true
+    pq_m: 8
+    pq_nbits: 8
+
+  # Matching
+  matching:
+    top_k: 10
+    min_similarity: 0.5
+    diversity_weight: 0.2
+
+    personalization:
+      enabled: true
+      feedback_weight: 0.3
+      min_interactions: 5
+
+# SageMaker Training Job Settings
+sagemaker:
+  # Instance configuration
+  instance_type: "ml.g5.xlarge"  # GPU instance for Qwen3-VL
+  instance_count: 1
+  volume_size: 50  # GB
+
+  # Spot instances (cost saving)
+  use_spot_instances: true
+  max_wait_time: 86400  # 24 hours
+  max_run_time: 86400
+
+  # Distributed training (if using multiple instances)
+  distribution:
+    enabled: false
+    type: "data_parallel"  # or "model_parallel"
+
+  # Hyperparameter tuning (optional)
+  hyperparameter_tuning:
+    enabled: false
+    strategy: "Bayesian"
+    max_jobs: 20
+    max_parallel_jobs: 2
+
+    hyperparameters:
+      learning_rate:
+        type: "Continuous"
+        min: 1e-5
+        max: 1e-4
+      batch_size:
+        type: "Categorical"
+        values: [8, 16, 32]
+      margin:
+        type: "Continuous"
+        min: 0.3
+        max: 0.7
+
+# Logging
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_file: "~/SageMaker/dating-matcher/logs/training.log"
+
+  # Experiment tracking
+  wandb:
+    enabled: true
+    project: "dating-profile-matcher-sagemaker"
+    entity: null
+    tags: ["sagemaker", "qwen3vl", "profile-matching"]
+
+  # SageMaker Experiments
+  sagemaker_experiments:
+    enabled: true
+    experiment_name: "dating-profile-matching"
+    trial_name: null  # Auto-generated
+
+# Hardware
+hardware:
+  device: "cuda"
+  gpu_ids: [0]
+  distributed: false
+
+  # Performance optimization
+  cudnn_benchmark: true
+  deterministic: false
+
+# Reproducibility
+reproducibility:
+  seed: 42
+  deterministic_mode: false
+
+# SageMaker Endpoint Deployment
+endpoint:
+  instance_type: "ml.g5.xlarge"
+  initial_instance_count: 1
+
+  # Auto-scaling
+  auto_scaling:
+    enabled: true
+    min_instances: 1
+    max_instances: 5
+    target_invocations_per_instance: 100
+
+  # Model monitoring
+  monitoring:
+    enabled: true
+    schedule: "Hourly"
+
+# Data Privacy (important for dating app)
+privacy:
+  anonymize_user_ids: true
+  remove_exif: true
+  encrypt_at_rest: true
+
+  gdpr:
+    allow_data_export: true
+    allow_data_deletion: true
+    retention_days: 365
+
+# Cost Optimization
+cost_optimization:
+  use_spot_instances: true
+  enable_early_stopping: true
+  early_stopping_patience: 5
+
+  # Automatic model compression
+  quantization:
+    enabled: false  # Already using FP8
+    method: "dynamic"

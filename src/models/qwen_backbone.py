@@ -1,0 +1,369 @@
+"""
+Qwen3-VL Vision-Language Model Integration for Profile Feature Extraction
+"""
+
+import torch
+import torch.nn as nn
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
+
+
+class Qwen3VLFeatureExtractor(nn.Module):
+    """
+    Feature extractor using Qwen3-VL-2B-Instruct-FP8 model
+
+    This model extracts visual features from profile images using
+    a pre-trained vision-language model.
+    """
+
+    def __init__(
+        self,
+        model_name="Qwen/Qwen3-VL-2B-Instruct-FP8",
+        embedding_dim=512,
+        freeze_vision_encoder=False,
+        use_projection_head=True,
+        device="cuda"
+    ):
+        """
+        Args:
+            model_name: HuggingFace model identifier
+            embedding_dim: Target embedding dimension
+            freeze_vision_encoder: Whether to freeze the vision encoder
+            use_projection_head: Whether to add a projection head
+            device: Device to load model on
+        """
+        super(Qwen3VLFeatureExtractor, self).__init__()
+
+        self.model_name = model_name
+        self.embedding_dim = embedding_dim
+        self.device = device
+
+        print(f"Loading Qwen3-VL model: {model_name}")
+
+        # Load model with FP8 quantization support
+        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,  # FP16 for efficiency
+            device_map="auto"
+        )
+
+        # Load processor
+        self.processor = AutoProcessor.from_pretrained(model_name)
+
+        # Get vision model hidden size
+        self.vision_hidden_size = self.model.config.vision_config.hidden_size
+
+        # Freeze vision encoder if requested
+        if freeze_vision_encoder:
+            self.freeze_vision_model()
+
+        # Projection head to map to desired embedding dimension
+        if use_projection_head:
+            self.projection_head = nn.Sequential(
+                nn.Linear(self.vision_hidden_size, embedding_dim * 2),
+                nn.LayerNorm(embedding_dim * 2),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(embedding_dim * 2, embedding_dim),
+            )
+        else:
+            self.projection_head = nn.Identity()
+            self.embedding_dim = self.vision_hidden_size
+
+        self.normalize = True
+
+    def freeze_vision_model(self):
+        """Freeze vision encoder parameters"""
+        for param in self.model.visual.parameters():
+            param.requires_grad = False
+        print("Vision encoder frozen")
+
+    def unfreeze_vision_model(self):
+        """Unfreeze vision encoder parameters"""
+        for param in self.model.visual.parameters():
+            param.requires_grad = True
+        print("Vision encoder unfrozen")
+
+    def extract_vision_features(self, pixel_values, image_grid_thw):
+        """
+        Extract features from vision encoder
+
+        Args:
+            pixel_values: Processed image tensor
+            image_grid_thw: Image grid dimensions
+
+        Returns:
+            vision_features: Extracted visual features
+        """
+        # Get vision embeddings
+        vision_outputs = self.model.visual(
+            pixel_values=pixel_values,
+            grid_thw=image_grid_thw
+        )
+
+        # Get the last hidden state
+        vision_features = vision_outputs[0]  # [batch_size, num_patches, hidden_size]
+
+        # Pool features (mean pooling over patches)
+        pooled_features = vision_features.mean(dim=1)  # [batch_size, hidden_size]
+
+        return pooled_features
+
+    def forward(self, images):
+        """
+        Forward pass for feature extraction
+
+        Args:
+            images: PIL Images or image tensors (already preprocessed)
+                   If PIL Images: list of PIL.Image objects
+                   If tensors: [batch_size, 3, H, W]
+
+        Returns:
+            embeddings: Feature embeddings [batch_size, embedding_dim]
+        """
+        # Process images through Qwen3-VL processor
+        if isinstance(images, list):
+            # PIL Images
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": img},
+                        {"type": "text", "text": "Describe this person's appearance."}
+                    ]
+                }
+                for img in images
+            ]
+
+            # Prepare inputs
+            text = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+
+            image_inputs, video_inputs = process_vision_info(messages)
+
+            inputs = self.processor(
+                text=text,
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt"
+            )
+            inputs = inputs.to(self.device)
+
+        else:
+            # Already processed tensors
+            # For batch processing, we need to use the processor
+            # This is a simplified version - adjust based on actual usage
+            inputs = {
+                'pixel_values': images.to(self.device),
+                'image_grid_thw': torch.tensor([[1, images.shape[2] // 14, images.shape[3] // 14]]).to(self.device)
+            }
+
+        # Extract vision features
+        with torch.cuda.amp.autocast():  # Mixed precision for efficiency
+            vision_features = self.extract_vision_features(
+                inputs['pixel_values'],
+                inputs.get('image_grid_thw')
+            )
+
+        # Project to embedding space
+        embeddings = self.projection_head(vision_features)
+
+        # L2 normalization
+        if self.normalize:
+            embeddings = nn.functional.normalize(embeddings, p=2, dim=1)
+
+        return embeddings
+
+    def get_embedding(self, image_path):
+        """
+        Get embedding for a single image
+
+        Args:
+            image_path: Path to image file
+
+        Returns:
+            embedding: Feature vector
+        """
+        from PIL import Image
+
+        image = Image.open(image_path).convert('RGB')
+
+        with torch.no_grad():
+            embedding = self.forward([image])
+
+        return embedding[0].cpu().numpy()
+
+    @classmethod
+    def load_from_checkpoint(cls, checkpoint_path, device='cuda'):
+        """
+        Load model from checkpoint
+
+        Args:
+            checkpoint_path: Path to checkpoint file
+            device: Device to load on
+
+        Returns:
+            model: Loaded model
+        """
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        config = checkpoint.get('config', {})
+
+        model = cls(
+            model_name=config.get('model_name', 'Qwen/Qwen3-VL-2B-Instruct-FP8'),
+            embedding_dim=config.get('embedding_dim', 512),
+            freeze_vision_encoder=False,
+            device=device
+        )
+
+        # Load projection head weights (vision model already loaded from HF)
+        if 'projection_head_state_dict' in checkpoint:
+            model.projection_head.load_state_dict(checkpoint['projection_head_state_dict'])
+        elif 'model_state_dict' in checkpoint:
+            # Load full state dict
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
+        model.eval()
+        return model
+
+    def save_checkpoint(self, path, optimizer=None, epoch=None, **kwargs):
+        """
+        Save model checkpoint
+
+        Args:
+            path: Path to save checkpoint
+            optimizer: Optimizer state
+            epoch: Current epoch
+            **kwargs: Additional metadata
+        """
+        checkpoint = {
+            'config': {
+                'model_name': self.model_name,
+                'embedding_dim': self.embedding_dim,
+                'vision_hidden_size': self.vision_hidden_size,
+            },
+            'projection_head_state_dict': self.projection_head.state_dict(),
+        }
+
+        if optimizer is not None:
+            checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+
+        if epoch is not None:
+            checkpoint['epoch'] = epoch
+
+        checkpoint.update(kwargs)
+
+        torch.save(checkpoint, path)
+        print(f"Checkpoint saved to {path}")
+
+
+class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
+    """
+    Extended version that can use both visual and text features
+    for multimodal profile matching
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Additional projection for text features
+        self.text_projection = nn.Sequential(
+            nn.Linear(self.model.config.hidden_size, self.embedding_dim),
+            nn.LayerNorm(self.embedding_dim),
+            nn.GELU()
+        )
+
+    def forward_with_text(self, images, text_descriptions):
+        """
+        Extract features using both image and text
+
+        Args:
+            images: List of PIL Images
+            text_descriptions: List of text descriptions
+
+        Returns:
+            embeddings: Combined embeddings
+        """
+        # Prepare multimodal inputs
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": img},
+                    {"type": "text", "text": desc}
+                ]
+            }
+            for img, desc in zip(images, text_descriptions)
+        ]
+
+        # Process through model
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        image_inputs, video_inputs = process_vision_info(messages)
+
+        inputs = self.processor(
+            text=text,
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt"
+        )
+        inputs = inputs.to(self.device)
+
+        # Forward pass
+        with torch.cuda.amp.autocast():
+            outputs = self.model(**inputs, output_hidden_states=True)
+
+            # Get vision features
+            vision_features = self.extract_vision_features(
+                inputs['pixel_values'],
+                inputs.get('image_grid_thw')
+            )
+
+            # Get text features (last hidden state, mean pooling)
+            text_features = outputs.hidden_states[-1].mean(dim=1)
+
+        # Project features
+        vision_emb = self.projection_head(vision_features)
+        text_emb = self.text_projection(text_features)
+
+        # Combine (weighted average)
+        embeddings = 0.7 * vision_emb + 0.3 * text_emb
+
+        # Normalize
+        embeddings = nn.functional.normalize(embeddings, p=2, dim=1)
+
+        return embeddings
+
+
+if __name__ == "__main__":
+    # Test the model
+    print("Testing Qwen3VLFeatureExtractor...")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    model = Qwen3VLFeatureExtractor(
+        model_name="Qwen/Qwen3-VL-2B-Instruct-FP8",
+        embedding_dim=512,
+        device=device
+    )
+
+    print(f"Model loaded on {device}")
+    print(f"Embedding dimension: {model.embedding_dim}")
+    print(f"Vision hidden size: {model.vision_hidden_size}")
+
+    # Test with dummy image
+    from PIL import Image
+    import numpy as np
+
+    dummy_image = Image.fromarray(np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8))
+
+    with torch.no_grad():
+        embedding = model.forward([dummy_image])
+
+    print(f"Output embedding shape: {embedding.shape}")
+    print(f"Embedding norm: {embedding.norm(dim=1).item():.4f}")

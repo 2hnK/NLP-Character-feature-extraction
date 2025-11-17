@@ -1,232 +1,402 @@
 # Dating Profile Matcher
 
-데이팅 앱 매칭률 향상을 위한 프로필 사진 특징 추출 시스템
+> **외모 유사도 기반 데이팅 앱 매칭률 향상 시스템**  
+> AWS SageMaker, Qwen3-VL-2B 기반 프로필 사진 특징 추출 및 매칭 프로젝트
+
+---
+
+## 목차
+
+- [프로젝트 개요](#-프로젝트-개요)
+- [핵심 가설](#-핵심-가설)
+- [기술 스택](#-기술-스택)
+- [프로젝트 구조](#-프로젝트-구조)
+- [빠른 시작](#-빠른-시작)
+- [개발 환경 설정](#-개발-환경-설정)
+- [데이터 구조](#-데이터-구조)
+- [주요 컴포넌트](#-주요-컴포넌트)
+- [개발 가이드](#-개발-가이드)
+- [성능 지표](#-성능-지표)
+- [프로젝트 로드맵](#-프로젝트-로드맵)
+- [문서](#-문서)
+- [참고 자료](#-참고-자료)
+
+---
 
 ## 프로젝트 개요
 
-사용자의 프로필 사진에서 시각적 특징을 추출하여 개인화된 매칭 추천을 제공하는 딥러닝 시스템입니다.
+데이팅 앱에서 **프로필 사진의 시각적 특징**을 학습하여, 서로 선호할 만한 외모 스타일을 가진 사용자끼리 매칭하는 딥러닝 시스템입니다.
 
 ### 핵심 기능
 
-- **특징 추출**: 프로필 사진에서 512차원 임베딩 벡터 추출
-- **유사도 기반 매칭**: Cosine similarity를 활용한 매칭 점수 계산
-- **개인화 추천**: 사용자 행동 피드백 기반 선호도 학습
-- **실시간 추론**: FastAPI 기반 REST API 제공
+- **이미지 임베딩 추출**: Qwen3-VL-2B 모델로 프로필 사진 → 512차원 벡터 변환
+- **유사도 기반 매칭**: Cosine Similarity를 활용한 Top-K 사용
+- **Metric Learning**: Triplet Loss로 같은 스타일끼리 가깝게 학습
+- **매칭 시뮬레이션**: 임베딩 기반 추천 시스템 프로토타입
+
+---
+
+## 핵심 가설
+
+> **"외적으로 뛰어난 사람은 상대의 외모가 뛰어나길 바라는 경향이 많다"**
+
+→  비슷한 매력도/스타일의 사용자끼리 매칭하면  
+→ 좋아요 비율이 증가할 것
+
+---
 
 ## 기술 스택
 
+### 핵심 기술
 - **프레임워크**: PyTorch 2.0+
-- **모델 아키텍처**:
-  - **Qwen3-VL-2B-Instruct-FP8**: 비전-언어 모델 (SageMaker)
-  - EfficientNet-B0 + Metric Learning (로컬 학습)
-- **학습 방법**: Triplet Loss / Contrastive Learning / Online Triplet Mining
-- **벡터 검색**: Faiss
-- **클라우드 플랫폼**: AWS SageMaker AI Studio
-- **API 서버**: FastAPI
-- **실험 관리**: Weights & Biases / SageMaker Experiments
+- **모델**: Qwen3-VL-2B-Instruct-FP8 (Vision-Language Model)
+- **학습 방법**: Triplet Loss / Metric Learning
+- **플랫폼**: AWS SageMaker AI Studio (GPU 학습)
 
-## 프로젝트 구조
+### 라이브러리
+```python
+# 핵심
+torch>=2.0.0
+transformers>=4.37.2
+pillow>=10.2.0
+numpy>=1.24.0
+
+# SageMaker
+sagemaker>=2.190.0
+boto3>=1.28.0
+
+# 실험 관리 (선택)
+wandb>=0.15.0
+
+# 시각화
+matplotlib>=3.8.2
+seaborn>=0.13.1
+scikit-learn>=1.4.0
+```
+
+### 데이터
+- **학습 데이터**: 증강된 이미지 3,200개 (생성형 AI로 생성)
+- **검증 데이터**: 실제 사용자 이미지 100개
+- **메타데이터**: user_id 기반 그룹화
+
+---
+
+## 📁 프로젝트 구조
 
 ```
 dating-profile-matcher/
-├── data/                      # 데이터 디렉토리
-│   ├── raw/                   # 원본 이미지
-│   ├── processed/             # 전처리된 데이터
-│   └── augmented/             # 증강 데이터
-├── models/                    # 모델 저장
-│   ├── checkpoints/           # 학습 체크포인트
-│   └── saved_models/          # 최종 모델
-├── src/                       # 소스 코드
-│   ├── data/                  # 데이터 처리
-│   │   ├── dataset.py         # Dataset 클래스
-│   │   ├── preprocessing.py   # 전처리 파이프라인
-│   │   └── augmentation.py    # 데이터 증강
-│   ├── models/                # 모델 정의
-│   │   ├── backbone.py        # Backbone 네트워크
-│   │   ├── embedding.py       # Embedding 레이어
-│   │   └── losses.py          # Loss 함수
-│   ├── training/              # 학습 관련
-│   │   ├── trainer.py         # Training loop
-│   │   └── utils.py           # 유틸리티
-│   ├── evaluation/            # 평가
-│   │   ├── metrics.py         # 평가 지표
-│   │   └── visualize.py       # 시각화
-│   └── inference/             # 추론 API
-│       ├── api.py             # FastAPI 서버
-│       └── matcher.py         # 매칭 엔진
-├── configs/                   # 설정 파일
-│   └── config.yaml            # 하이퍼파라미터
-├── notebooks/                 # Jupyter 노트북
-│   └── exploration.ipynb      # 데이터 탐색
-├── docs/                      # 문서
-│   ├── ARCHITECTURE.md        # 아키텍처 설계
-│   ├── DATA_SPEC.md           # 데이터 명세
-│   └── API_SPEC.md            # API 명세
-├── tests/                     # 테스트 코드
-├── logs/                      # 로그 파일
-├── requirements.txt           # 의존성
-└── README.md                  # 프로젝트 설명
+├── data/                           # 데이터 디렉토리
+│   ├── raw/
+│   │   └── profiles/              # 실제 사용자 이미지 (100개)
+│   ├── augmented/
+│   │   └── generated/             # 증강 이미지 (3,200개)
+│   └── processed/
+│       ├── train/                 # 전처리된 학습 데이터
+│       ├── val/                   # 전처리된 검증 데이터
+│       ├── train_metadata.csv     # 학습 메타데이터
+│       └── val_metadata.csv       # 검증 메타데이터
+│
+├── models/                         # 모델 저장
+│   ├── checkpoints/               # 학습 중 체크포인트
+│   │   ├── epoch_2.pt
+│   │   ├── epoch_4.pt
+│   │   └── ...
+│   └── saved_models/              # 최종 모델
+│       ├── best_model.pt          # Best validation loss 모델
+│       ├── baseline_embeddings.pt  # 베이스라인 임베딩
+│       └── matching_index.pt      # 매칭 인덱스
+│
+├── src/                           # 소스 코드
+│   ├── data/
+│   │   ├── dataset.py            # TripletDataset 클래스
+│   │   └── preprocessing.py      # 이미지 전처리 파이프라인
+│   ├── models/
+│   │   ├── feature_extractor.py  # Qwen 기반 Feature Extractor
+│   │   └── losses.py             # TripletLoss 구현
+│   ├── training/
+│   │   ├── trainer.py            # Training Loop 클래스
+│   │   └── utils.py              # 학습 유틸리티
+│   ├── evaluation/
+│   │   ├── metrics.py            # 평가 지표 (Intra/Inter distance)
+│   │   └── visualize.py          # t-SNE, 유사도 히트맵
+│   └── inference/
+│       └── matcher.py            # MatchingEngine 클래스
+│
+├── notebooks/                     # Jupyter 노트북 (SageMaker용)
+│   ├── 01_data_exploration.ipynb  # 데이터 탐색
+│   ├── 02_model_loading.ipynb     # Qwen 모델 로드 테스트
+│   ├── 03_training.ipynb          # 학습 실행
+│   └── 04_evaluation.ipynb        # 평가 및 시각화
+│
+├── configs/
+│   └── config.yaml               # 하이퍼파라미터 설정
+│
+├── logs/                          # 로그 및 시각화 결과
+│   ├── training_losses.png
+│   ├── baseline_embeddings.png
+│   ├── similarity_heatmap.png
+│   └── evaluation_results.json
+│
+├── docs/                          # 프로젝트 문서
+│   ├── PROJECT_CONTEXT.md        # 프로젝트 전체 맥락
+│   ├── TECHNICAL_GUIDE.md        # 기술 가이드 (상세 설명)
+│   ├── WORKFLOW.md               # 단계별 작업 가이드
+│   └── GLOSSARY.md               # 용어 사전
+│
+├── requirements.txt               # Python 의존성
+├── .gitignore                     # Git 제외 파일
+└── README.md                      # 이 파일
 ```
 
-## 빠른 시작
+---
 
-### 옵션 A: AWS SageMaker Studio (권장)
+## 개발 환경 설정
 
+### 옵션 A: AWS SageMaker Studio (GPU 학습)
+
+#### 1. SageMaker Studio 접속
+```
+1. AWS 콘솔 → SageMaker → Studio
+2. "Open Studio" 클릭
+3. Domain/User 선택
+```
+
+#### 2. 프로젝트 클론 & 설정
 ```bash
-# 1. SageMaker Studio에서 터미널 열기
-cd ~/SageMaker/dating-profile-matcher
+# SageMaker Studio Terminal
+cd ~/SageMaker
+git clone <your-repo-url> dating-profile-matcher
+cd dating-profile-matcher
 
-# 2. 의존성 설치
+# 환경 설정
 pip install -r requirements.txt
 
-# 3. 데이터 전처리
-python src/data/preprocessing.py \
-    --input_dir ~/SageMaker/dating-matcher/data/raw/profiles \
-    --output_dir ~/SageMaker/dating-matcher/data/processed \
-    --metadata_csv ~/SageMaker/dating-matcher/data/raw/metadata.csv \
-    --output_metadata_csv ~/SageMaker/dating-matcher/data/processed/metadata.csv
-
-# 4. Jupyter Notebook으로 학습 시작
-# notebooks/sagemaker_training.ipynb 열기
+# 디렉토리 생성
+mkdir -p data/{raw/profiles,augmented/generated,processed/{train,val}}
+mkdir -p models/{checkpoints,saved_models}
+mkdir -p logs
 ```
 
-**자세한 내용**: [SageMaker 사용 가이드](docs/SAGEMAKER_GUIDE.md)
+#### 3. Notebook 환경
+- **Kernel**: Python 3 (PyTorch 2.0 GPU Optimized)
+- **Instance**: 
+  - 개발: `ml.t3.medium` (CPU, 저렴)
+  - 학습: `ml.g5.xlarge` (1 GPU, ~$1/hour)
 
-### 옵션 B: 로컬 환경
+### 옵션 B: 로컬 환경 (VSCode + Claude Code)
 
+#### 1. 저장소 클론
 ```bash
-# 1. 가상환경 생성
+git clone <your-repo-url>
+cd dating-profile-matcher
+```
+
+#### 2. 가상환경 생성
+```bash
+# Windows
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+venv\Scripts\activate
 
-# 2. 의존성 설치
+# macOS/Linux
+python3 -m venv venv
+source venv/bin/activate
+```
+
+#### 3. 의존성 설치
+```bash
 pip install -r requirements.txt
-
-# 3. 데이터 전처리
-python src/data/preprocessing.py --input data/raw --output data/processed
-
-# 4. 모델 학습
-python src/training/train.py --config configs/config.yaml
-
-# 학습 재개
-python src/training/train.py --config configs/config.yaml --resume models/checkpoints/last.pth
 ```
 
-### 4. 모델 평가
+---
 
-```bash
-# 평가 실행
-python src/evaluation/evaluate.py --model models/saved_models/best_model.pth --data data/processed/test
+## 데이터 구조
 
-# 시각화
-python src/evaluation/visualize.py --model models/saved_models/best_model.pth
+### 파일명 규칙
+```
+# 실제 사용자 이미지
+user_{user_id}_{image_idx}.jpg
+
+예시:
+- user_001_1.jpg  (user_001의 첫 번째 사진)
+- user_001_2.jpg  (user_001의 두 번째 사진)
+- user_042_1.jpg  (user_042의 첫 번째 사진)
+
+# 증강 이미지
+gen_{idx}.jpg
+
+예시:
+- gen_0001.jpg
+- gen_0002.jpg
 ```
 
-### 5. API 서버 실행
-
-```bash
-# FastAPI 서버 시작
-uvicorn src.inference.api:app --host 0.0.0.0 --port 8000 --reload
-
-# API 문서: http://localhost:8000/docs
+### 메타데이터 (CSV)
+```csv
+filename,user_id,image_idx,filepath
+user_001_1.jpg,user_001,1,data/processed/train/user_001_1.jpg
+user_001_2.jpg,user_001,2,data/processed/train/user_001_2.jpg
+user_042_1.jpg,user_042,1,data/processed/train/user_042_1.jpg
 ```
 
-## 사용 예제
+### 데이터 통계
+```
+총 이미지: 3,300개
+├── 학습용 (증강): 3,200개
+│   └── 예상 사용자 수: 약 1,000명 (평균 3장/사용자)
+└── 검증용 (실제): 100개
+    └── 사용자 수: 약 30-50명 (1-3장/사용자)
+```
 
-### 특징 추출
+---
 
+## 주요 컴포넌트
+
+### 1. TripletDataset (`src/data/dataset.py`)
 ```python
-from src.models.embedding import ProfileFeatureExtractor
-import torch
-from PIL import Image
+# (Anchor, Positive, Negative) 조합 생성
+dataset = TripletDataset(
+    metadata_csv="data/processed/train_metadata.csv",
+    image_dir="data/processed/train",
+    transform=train_transform
+)
 
-# 모델 로드
-model = ProfileFeatureExtractor.load_from_checkpoint('models/saved_models/best_model.pth')
-model.eval()
-
-# 이미지 로드 및 전처리
-image = Image.open('profile.jpg')
-tensor = preprocess(image).unsqueeze(0)
-
-# 특징 추출
-with torch.no_grad():
-    embedding = model(tensor)
-
-print(f"Feature vector shape: {embedding.shape}")  # [1, 512]
+# 샘플 출력
+anchor, positive, negative = dataset[0]
+# anchor: user_001_1.jpg
+# positive: user_001_2.jpg (같은 사용자)
+# negative: user_042_1.jpg (다른 사용자)
 ```
 
-### 매칭 추천
-
+### 2. FeatureExtractor (`src/models/feature_extractor.py`)
 ```python
-from src.inference.matcher import MatchingEngine
+# Qwen Vision Encoder 기반 임베딩 추출
+extractor = FeatureExtractor(vision_model, processor)
 
-# 매칭 엔진 초기화
-matcher = MatchingEngine(model_path='models/saved_models/best_model.pth')
+# 단일 이미지
+embedding = extractor.extract_from_path("user_001.jpg")
+# embedding.shape: [512]
 
-# 사용자별 특징 벡터 등록
-matcher.add_user(user_id='user_001', image_path='user_001.jpg')
-matcher.add_user(user_id='user_002', image_path='user_002.jpg')
+# 배치 처리
+embeddings = extractor.extract_batch_from_paths(
+    image_paths, 
+    batch_size=32
+)
+# embeddings.shape: [N, 512]
+```
 
-# 매칭 추천
-matches = matcher.recommend_matches(user_id='user_001', top_k=10)
-print(matches)
+### 3. Trainer (`src/training/trainer.py`)
+```python
+# 학습 설정
+config = {
+    'batch_size': 32,
+    'learning_rate': 1e-4,
+    'margin': 1.0,
+    'epochs': 10
+}
+
+trainer = Trainer(model, train_loader, val_loader, config)
+train_losses, val_losses = trainer.train(num_epochs=10)
+```
+
+### 4. MatchingEngine (`src/inference/matcher.py`)
+```python
+# 매칭 엔진
+engine = MatchingEngine(model, processor)
+engine.build_index("data/processed/val")
+
+# Top-K 추천
+matches = engine.search("user_001", top_k=5)
 # [('user_042', 0.89), ('user_137', 0.85), ...]
 ```
 
-### REST API 호출
+---
 
-```bash
-# 특징 추출
-curl -X POST "http://localhost:8000/extract_features" \
-  -F "image=@profile.jpg"
+## 워크플로우
 
-# 매칭 추천
-curl -X GET "http://localhost:8000/matches/user_001?top_k=10"
 ```
+Phase 0: 환경 설정 (1-2일)
+  └─→ SageMaker Studio 또는 로컬 환경 구축
+  └─→ 데이터 업로드
+  └─→ 기본 테스트
+
+Phase 1: 데이터 준비 (2-3일)
+  └─→ 데이터 탐색 (EDA)
+  └─→ 전처리 파이프라인 구현
+  └─→ TripletDataset 구현
+  └─→ DataLoader 테스트
+
+Phase 2: 베이스라인 구축 (3-4일)
+  └─→ Qwen 모델 로드
+  └─→ Feature Extraction 구현
+  └─→ 유사도 계산 검증
+  └─→ 베이스라인 성능 측정
+
+Phase 3: Fine-tuning (5-7일)
+  └─→ Triplet Loss 구현
+  └─→ Trainer 클래스 구현
+  └─→ 모델 학습 실행
+  └─→ 하이퍼파라미터 실험
+
+Phase 4: 평가 및 검증 (2-3일)
+  └─→ Fine-tuned 모델 평가
+  └─→ 베이스라인 대비 성능 비교
+  └─→ 시각화 (t-SNE, 히트맵)
+  └─→ 매칭 시뮬레이션
+
+Phase 5: 문서화 (2-3일)
+  └─→ 코드 정리 및 주석
+  └─→ 최종 보고서 작성
+  └─→ 발표 자료 준비
+```
+
+---
 
 ## 성능 지표
 
-### 현재 베이스라인 성능
+### 평가 메트릭
 
-- **임베딩 품질**: Intra-class distance < 0.3, Inter-class distance > 0.7
-- **Retrieval Accuracy**: Top-1: 72%, Top-5: 89%, Top-10: 94%
-- **추론 속도**: ~15ms/image (GPU), ~50ms/image (CPU)
+#### 1. 임베딩 품질
+```python
+# 같은 사용자 내 거리 (작을수록 좋음)
+Intra-class distance = 평균(같은 사용자 사진 간 거리)
+목표: < 0.3
 
-### 목표 지표
+# 다른 사용자 간 거리 (클수록 좋음)
+Inter-class distance = 평균(다른 사용자 사진 간 거리)
+목표: > 0.7
 
-- **비즈니스 KPI**: 매칭 성사율 20% 향상
-- **사용자 참여도**: 좋아요 비율 15% 증가
-- **시스템 성능**: P95 latency < 100ms
+# 분리도 (클수록 좋음)
+Separation = Inter-class - Intra-class
+목표: > 0.4
+```
 
-## 개발 로드맵
+#### 2. 비즈니스 KPI
+```
+좋아요 비율 = (좋아요 수) / (매칭 추천 수) × 100%
+```
 
-- [x] Phase 1: 프로젝트 세팅 및 베이스라인 구현
-- [ ] Phase 2: 사용자 행동 데이터 통합
-- [ ] Phase 3: 멀티태스크 학습 적용
-- [ ] Phase 4: 모델 경량화 및 최적화
-- [ ] Phase 5: 프로덕션 배포
-- [ ] Phase 6: A/B 테스트 및 개선
+---
 
-## 기여 가이드
+## 문서
 
-1. 이슈 생성 또는 기존 이슈 확인
-2. Feature 브랜치 생성 (`git checkout -b feature/AmazingFeature`)
-3. 변경사항 커밋 (`git commit -m 'Add some AmazingFeature'`)
-4. 브랜치 푸시 (`git push origin feature/AmazingFeature`)
-5. Pull Request 생성
+### 필수 문서 (먼저 읽기)
 
-## 라이센스
+1. 
 
-이 프로젝트는 MIT 라이센스를 따릅니다.
+### 참고 자료
 
-## 연락처
+- **[Qwen-VL GitHub](https://github.com/QwenLM/Qwen-VL)**: 공식 문서
+- **[SageMaker 가이드](https://docs.aws.amazon.com/sagemaker/)**: AWS 공식 문서
+- **[PyTorch Metric Learning](https://github.com/KevinMusgrave/pytorch-metric-learning)**: 라이브러리
+- **[PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md)**: 프로젝트 목표, 데이터, 모델 아키텍처
 
-프로젝트 관리자: [Your Name]
-이메일: [your.email@example.com]
+---
 
-## 참고 자료
+## 참고 논문
 
-- [FaceNet Paper](https://arxiv.org/abs/1503.03832)
-- [ArcFace Paper](https://arxiv.org/abs/1801.07698)
-- [EfficientNet Paper](https://arxiv.org/abs/1905.11946)
-- [Metric Learning Survey](https://arxiv.org/abs/2002.08473)
+### Metric Learning
+- **[FaceNet](https://arxiv.org/abs/1503.03832)**: Triplet Loss의 원조
+- **[Deep Metric Learning Survey](https://arxiv.org/abs/2002.08473)**: 전체 개요
+
+### Vision Models
+- **[Vision Transformer (ViT)](https://arxiv.org/abs/2010.11929)**: Transformer for Images
+- **[CLIP](https://arxiv.org/abs/2103.00020)**: Vision-Language Learning

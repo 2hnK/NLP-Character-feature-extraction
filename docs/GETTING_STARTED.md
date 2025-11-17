@@ -1,6 +1,6 @@
 # Getting Started Guide
 
-빠르게 시작하기 위한 가이드입니다.
+AWS SageMaker AI Studio에서 Qwen3-VL-2B 모델로 데이팅 프로필 매칭 시스템을 빠르게 시작하는 가이드입니다.
 
 ## 목차
 
@@ -8,358 +8,407 @@
 2. [데이터 준비](#데이터-준비)
 3. [모델 학습](#모델-학습)
 4. [모델 평가](#모델-평가)
-5. [API 서버 실행](#api-서버-실행)
+5. [추론 및 매칭](#추론-및-매칭)
 
 ## 환경 설정
 
-### 1. 저장소 클론 및 이동
+### 1. SageMaker Studio 접속
+
+```
+1. AWS 콘솔 → SageMaker → Studio
+2. "Open Studio" 클릭
+3. Domain/User 선택
+```
+
+### 2. 프로젝트 클론 및 설정
 
 ```bash
+# SageMaker Studio Terminal
+cd ~/SageMaker
+git clone <your-repo-url> dating-profile-matcher
 cd dating-profile-matcher
-```
 
-### 2. 가상환경 생성 및 활성화
-
-```bash
-# Python 가상환경 생성
-python -m venv venv
-
-# 활성화 (Linux/Mac)
-source venv/bin/activate
-
-# 활성화 (Windows)
-venv\Scripts\activate
-```
-
-### 3. 의존성 설치
-
-```bash
-# 필수 패키지 설치
+# 의존성 설치
 pip install -r requirements.txt
 
-# GPU 사용 시 Faiss GPU 버전 설치 (선택)
-pip uninstall faiss-cpu
-pip install faiss-gpu
+# 디렉토리 생성
+mkdir -p data/{raw/profiles,raw/augmented,processed/{train,val}}
+mkdir -p models/{checkpoints,saved_models}
+mkdir -p logs
 ```
 
-### 4. 설치 확인
+### 3. Notebook 커널 설정
 
-```bash
-python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
-```
+- **Kernel**: Python 3 (PyTorch 2.0 GPU Optimized)
+- **Instance**: 
+  - 개발/테스트: `ml.t3.medium` (CPU)
+  - 모델 학습: `ml.g5.xlarge` (1 GPU)
+
+**예상 비용:**
+- ml.t3.medium: ~$0.05/시간
+- ml.g5.xlarge: ~$1.41/시간 (Spot 사용 시 ~$0.42/시간)
 
 ## 데이터 준비
 
-### 1. 데이터 디렉토리 구조 생성
+### 1. 데이터 디렉토리 구조
 
 ```bash
-mkdir -p data/raw/profiles
-mkdir -p data/processed
+data/
+├── raw/
+│   ├── profiles/          # 실제 사용자 이미지 (100개)
+│   └── augmented/         # 증강 이미지 (3,200개)
+└── processed/
+    ├── train/             # 전처리된 학습 데이터
+    ├── val/               # 전처리된 검증 데이터
+    ├── train_metadata.csv
+    └── val_metadata.csv
 ```
 
-### 2. 원본 이미지 및 메타데이터 준비
+### 2. 원본 데이터 업로드
 
-원본 프로필 이미지를 `data/raw/profiles/`에 배치하고, 메타데이터 CSV를 생성합니다.
+**SageMaker Studio 파일 브라우저 사용:**
 
-**metadata.csv 예시:**
+1. 좌측 메뉴에서 파일 브라우저 열기
+2. `data/raw/profiles/`로 이동
+3. 실제 사용자 이미지 (100개) 업로드
+4. `data/raw/augmented/`로 이동
+5. 증강 이미지 (3,200개) 업로드
 
-```csv
-user_id,image_path,gender,age,face_detected,face_confidence,image_quality,is_synthetic,source
-user_001,user_001.jpg,F,28,True,0.95,0.87,False,real
-user_002,user_002.jpg,M,32,True,0.89,0.82,False,real
-user_003,user_003.jpg,F,25,True,0.91,0.79,False,real
-```
-
-저장 위치: `data/raw/metadata.csv`
-
-**interactions.csv 예시 (선택):**
-
-```csv
-interaction_id,user_id,target_user_id,action,timestamp,is_mutual,conversation_started
-int_001,user_001,user_002,like,2024-01-15 15:45:30,True,True
-int_002,user_001,user_003,pass,2024-01-15 15:46:10,False,False
-```
-
-저장 위치: `data/raw/interactions.csv`
-
-### 3. 이미지 전처리 (얼굴 검출 및 크롭)
+**또는 AWS CLI 사용:**
 
 ```bash
-python src/data/preprocessing.py \
-    --input_dir data/raw/profiles \
-    --output_dir data/processed \
-    --metadata_csv data/raw/metadata.csv \
-    --output_metadata_csv data/processed/metadata.csv \
-    --image_size 224 \
-    --detector mtcnn
+# 로컬에서 S3로 업로드
+aws s3 sync local_data/profiles/ s3://your-bucket/dating-matcher/profiles/
+aws s3 sync local_data/augmented/ s3://your-bucket/dating-matcher/augmented/
+
+# SageMaker에서 S3에서 다운로드
+aws s3 sync s3://your-bucket/dating-matcher/ ~/SageMaker/dating-profile-matcher/data/raw/
 ```
 
-**처리 결과:**
-- 전처리된 이미지: `data/processed/`
-- 성공한 이미지의 메타데이터: `data/processed/metadata.csv`
-- 디버그 정보: `data/processed/metadata_debug.csv`
-
-### 4. 데이터 분할 (Train/Val/Test)
+### 3. 메타데이터 생성
 
 ```python
-# 간단한 분할 스크립트 (Python 인터프리터에서 실행)
+# create_metadata.py
 import pandas as pd
+from pathlib import Path
+
+# 실제 이미지 메타데이터
+real_images = []
+for img_path in Path('data/raw/profiles').glob('*.jpg'):
+    filename = img_path.name
+    # 파일명 형식: user_001_1.jpg
+    parts = filename.replace('.jpg', '').split('_')
+    user_id = f"{parts[0]}_{parts[1]}"
+    image_idx = int(parts[2])
+    
+    real_images.append({
+        'filename': filename,
+        'user_id': user_id,
+        'image_idx': image_idx,
+        'filepath': f'data/raw/profiles/{filename}',
+        'is_synthetic': False
+    })
+
+# 증강 이미지 메타데이터
+aug_images = []
+for img_path in Path('data/raw/augmented').glob('*.jpg'):
+    filename = img_path.name
+    # 파일명 형식: gen_0001.jpg
+    user_id = filename.replace('.jpg', '')
+    
+    aug_images.append({
+        'filename': filename,
+        'user_id': user_id,
+        'image_idx': 1,
+        'filepath': f'data/raw/augmented/{filename}',
+        'is_synthetic': True
+    })
+
+# 데이터프레임 생성
+df = pd.DataFrame(real_images + aug_images)
+
+# Train/Val 분할 (85:15)
 from sklearn.model_selection import train_test_split
-
-# 메타데이터 로드
-df = pd.read_csv('data/processed/metadata.csv')
-
-# 사용자 ID 기준 분할
 user_ids = df['user_id'].unique()
+train_users, val_users = train_test_split(user_ids, test_size=0.15, random_state=42)
 
-train_users, temp_users = train_test_split(user_ids, test_size=0.3, random_state=42)
-val_users, test_users = train_test_split(temp_users, test_size=0.5, random_state=42)
-
-# 분할된 데이터 저장
 train_df = df[df['user_id'].isin(train_users)]
 val_df = df[df['user_id'].isin(val_users)]
-test_df = df[df['user_id'].isin(test_users)]
 
+# 저장
 train_df.to_csv('data/processed/train_metadata.csv', index=False)
 val_df.to_csv('data/processed/val_metadata.csv', index=False)
-test_df.to_csv('data/processed/test_metadata.csv', index=False)
 
 print(f"Train: {len(train_df)} images, {len(train_users)} users")
 print(f"Val: {len(val_df)} images, {len(val_users)} users")
-print(f"Test: {len(test_df)} images, {len(test_users)} users")
+```
+
+실행:
+
+```bash
+python create_metadata.py
 ```
 
 ## 모델 학습
 
-### 1. 설정 파일 확인 및 수정
+### 1. Qwen 모델 로드 테스트
 
-`configs/config.yaml` 파일을 열어서 경로와 하이퍼파라미터를 확인합니다.
+먼저 Jupyter Notebook에서 모델이 정상적으로 로드되는지 확인합니다.
+
+```python
+# test_model_loading.ipynb
+import torch
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+
+# 모델 로드
+model_name = "Qwen/Qwen2-VL-2B-Instruct"
+model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model_name,
+    torch_dtype=torch.float16,
+    device_map="auto"
+)
+processor = AutoProcessor.from_pretrained(model_name)
+
+print(f"Model loaded: {model.__class__.__name__}")
+print(f"Device: {next(model.parameters()).device}")
+```
+
+### 2. 학습 설정 확인
+
+`configs/config.yaml` 파일에서 주요 설정을 확인/수정합니다:
 
 ```yaml
-# 주요 설정 항목
+# 데이터 경로
 paths:
-  processed_data: "data/processed"
+  train_metadata: "data/processed/train_metadata.csv"
+  val_metadata: "data/processed/val_metadata.csv"
+  data_root: "data/raw"
 
-training:
-  batch_size: 32
-  num_epochs: 50
-  learning_rate: 1e-4
-
+# 모델 설정
 model:
-  backbone: "efficientnet_b0"
+  name: "Qwen/Qwen2-VL-2B-Instruct"
   embedding_dim: 512
+  freeze_vision_encoder: true  # Stage 1에서는 freeze
+
+# 학습 파라미터
+training:
+  batch_size: 16
+  num_epochs: 15
+  learning_rate: 1e-4
+  margin: 1.0  # Triplet Loss margin
+  
+# SageMaker 설정
+sagemaker:
+  instance_type: "ml.g5.xlarge"
+  use_spot_instances: true
 ```
 
-### 2. 학습 시작
+### 3. 학습 시작 (SageMaker Training Job)
 
-```bash
-# 기본 학습
-python src/training/train.py --config configs/config.yaml
+**노트북에서 실행:**
 
-# Weights & Biases 로깅 비활성화
-# config.yaml에서 logging.wandb.enabled: false로 설정
-```
+```python
+# notebooks/sagemaker_training.ipynb
+import sagemaker
+from sagemaker.pytorch import PyTorch
 
-### 3. 학습 중단 후 재개
+sess = sagemaker.Session()
+role = sagemaker.get_execution_role()
 
-```bash
-python src/training/train.py \
-    --config configs/config.yaml \
-    --resume models/checkpoints/last.pth
+# Training Job 설정
+estimator = PyTorch(
+    entry_point='train_sagemaker.py',
+    source_dir='../src/training',
+    role=role,
+    instance_type='ml.g5.xlarge',
+    instance_count=1,
+    framework_version='2.1.0',
+    py_version='py310',
+    hyperparameters={
+        'config': '../configs/config.yaml',
+        'num-epochs': 15,
+        'batch-size': 16
+    },
+    use_spot_instances=True,
+    max_run=3*60*60,  # 3시간
+    max_wait=3*60*60
+)
+
+# 학습 시작
+estimator.fit()
 ```
 
 ### 4. 학습 모니터링
 
-**TensorBoard:**
-```bash
-tensorboard --logdir logs/tensorboard
-# 브라우저에서 http://localhost:6006 접속
+**CloudWatch Logs:**
+
+```python
+# 로그 실시간 확인
+estimator.logs()
 ```
 
-**Weights & Biases:**
-- W&B 대시보드에서 실시간 모니터링
-- wandb.ai에서 확인
+**주요 확인 사항:**
 
-### 5. 학습 결과 확인
+- Triplet Loss 감소 추세
+- Training/Validation Loss 차이
+- GPU 메모리 사용량
+- Epoch당 소요 시간
 
-```bash
-# 체크포인트 확인
-ls -lh models/checkpoints/
+**예상 학습 시간:**
 
-# 최종 모델 확인
-ls -lh models/saved_models/
-```
+- 3,300개 이미지, batch_size=16: 약 2-3시간 (15 epochs)
 
 ## 모델 평가
 
-### 1. 평가 스크립트 작성
+### 1. 학습된 모델 로드
 
 ```python
-# evaluate.py (간단한 평가 예시)
-import sys
+# evaluate_model.ipynb
 import torch
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
-
-from src.models.backbone import ProfileFeatureExtractor
-from src.data.dataset import create_dataloaders
-from src.evaluation.metrics import evaluate_model
-
-# 설정
-model_path = 'models/saved_models/best_model.pth'
-device = 'cuda'
+from src.models.qwen_backbone import Qwen3VLFeatureExtractor
 
 # 모델 로드
-model = ProfileFeatureExtractor.load_from_checkpoint(model_path, device=device)
-
-# 데이터 로더 생성
-_, val_loader = create_dataloaders(
-    data_root='data/processed',
-    metadata_csv='data/processed/val_metadata.csv',
-    batch_size=64,
-    num_workers=4,
-    image_size=224,
-    dataset_type='online_triplet'
-)
-
-# 평가
-print("Evaluating model...")
-metrics = evaluate_model(model, val_loader, device=device)
-
-print("\nEvaluation Results:")
-for key, value in metrics.items():
-    print(f"  {key}: {value:.4f}")
-```
-
-```bash
-python evaluate.py
-```
-
-### 2. 예상 출력
-
-```
-Evaluation Results:
-  intra_class_mean: 0.2543
-  inter_class_mean: 0.8721
-  separation_ratio: 3.4301
-  top_1_accuracy: 0.7234
-  top_5_accuracy: 0.8912
-  top_10_accuracy: 0.9401
-  mAP: 0.8123
-  silhouette_score: 0.6543
-```
-
-## API 서버 실행
-
-### 1. 환경 변수 설정
-
-```bash
-export MODEL_PATH=models/saved_models/best_model.pth
-export DEVICE=cuda
-export INDEX_TYPE=Flat
-```
-
-### 2. 서버 시작
-
-```bash
-# 개발 모드 (자동 재시작)
-uvicorn src.inference.api:app --host 0.0.0.0 --port 8000 --reload
-
-# 프로덕션 모드
-uvicorn src.inference.api:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-### 3. API 문서 확인
-
-브라우저에서 접속:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
-### 4. API 사용 예시
-
-**Health Check:**
-```bash
-curl http://localhost:8000/
-```
-
-**특징 추출:**
-```bash
-curl -X POST "http://localhost:8000/extract_features" \
-  -F "image=@path/to/profile.jpg" \
-  -F "user_id=user_123"
-```
-
-**사용자 추가:**
-```bash
-curl -X POST "http://localhost:8000/add_user?user_id=user_123" \
-  -F "file=@path/to/profile.jpg"
-```
-
-**매칭 조회:**
-```bash
-curl "http://localhost:8000/matches/user_123?top_k=10"
-```
-
-**선호도 업데이트:**
-```bash
-curl -X POST "http://localhost:8000/update_preferences" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user_123",
-    "liked_users": ["user_456", "user_789"],
-    "passed_users": ["user_111"]
-  }'
-```
-
-## Python 스크립트에서 사용
-
-```python
-from src.models.backbone import ProfileFeatureExtractor
-from src.inference.matcher import MatchingEngine
-import torch
-
-# 1. 모델 로드
-model = ProfileFeatureExtractor.load_from_checkpoint(
+model = Qwen3VLFeatureExtractor.load_from_checkpoint(
     'models/saved_models/best_model.pth',
     device='cuda'
 )
+model.eval()
+```
 
-# 2. 매칭 엔진 초기화
-matcher = MatchingEngine(
+### 2. 임베딩 품질 평가
+
+```python
+from src.evaluation.metrics import evaluate_embeddings
+
+# 검증 데이터로 임베딩 생성
+val_metadata = pd.read_csv('data/processed/val_metadata.csv')
+embeddings, user_ids = [], []
+
+for _, row in val_metadata.iterrows():
+    img_path = row['filepath']
+    embedding = model.extract_from_path(img_path)
+    embeddings.append(embedding)
+    user_ids.append(row['user_id'])
+
+embeddings = torch.stack(embeddings)
+
+# 평가 지표 계산
+metrics = evaluate_embeddings(embeddings, user_ids)
+
+print("Evaluation Results:")
+print(f"  Intra-class distance: {metrics['intra_distance']:.4f}")
+print(f"  Inter-class distance: {metrics['inter_distance']:.4f}")
+print(f"  Separation: {metrics['separation']:.4f}")
+```
+
+**목표 지표:**
+
+- Intra-class distance: < 0.3 (같은 사용자 이미지끼리 가까움)
+- Inter-class distance: > 0.7 (다른 사용자끼리 멀리)
+- Separation: > 0.4
+
+### 3. 시각화
+
+```python
+from src.evaluation.visualize import plot_tsne, plot_similarity_heatmap
+
+# t-SNE 시각화
+plot_tsne(embeddings, user_ids, save_path='logs/tsne_visualization.png')
+
+# 유사도 히트맵 (샘플 사용자)
+sample_users = user_ids[:20]
+plot_similarity_heatmap(
+    embeddings[:20], 
+    sample_users,
+    save_path='logs/similarity_heatmap.png'
+)
+```
+
+## 추론 및 매칭
+
+### 1. 매칭 엔진 구축
+
+```python
+# matching_demo.ipynb
+from src.inference.matcher import MatchingEngine
+import pandas as pd
+
+# 매칭 엔진 초기화
+engine = MatchingEngine(
     model_path='models/saved_models/best_model.pth',
-    device='cuda',
-    index_type='Flat'
+    device='cuda'
 )
 
-# 3. 사용자 추가
-matcher.add_user('user_001', 'data/processed/user_001.jpg')
-matcher.add_user('user_002', 'data/processed/user_002.jpg')
-matcher.add_user('user_003', 'data/processed/user_003.jpg')
+# 모든 검증 데이터로 인덱스 구축
+val_metadata = pd.read_csv('data/processed/val_metadata.csv')
+for _, row in val_metadata.iterrows():
+    engine.add_user(row['user_id'], row['filepath'])
 
-# 4. 인덱스 구축
-matcher.build_index_from_users()
+# 인덱스 구축
+engine.build_index()
+print(f"Index built with {len(engine.user_embeddings)} users")
+```
 
-# 5. 매칭 조회
-matches = matcher.find_matches('user_001', top_k=5)
-print("Matches for user_001:")
-for user_id, similarity in matches:
-    print(f"  {user_id}: {similarity:.4f}")
+### 2. 매칭 테스트
 
-# 6. 선호도 업데이트
-matcher.update_preferences(
-    user_id='user_001',
-    liked_users=['user_002']
+```python
+# 특정 사용자에 대한 Top-K 매칭
+query_user = 'user_001'
+matches = engine.find_matches(query_user, top_k=10)
+
+print(f"Top 10 matches for {query_user}:")
+for i, (user_id, similarity) in enumerate(matches, 1):
+    print(f"  {i}. {user_id}: {similarity:.4f}")
+```
+
+**예상 출력:**
+
+```
+Top 10 matches for user_001:
+  1. user_042: 0.8912
+  2. user_137: 0.8654
+  3. user_089: 0.8432
+  ...
+```
+
+### 3. 시각적 확인
+
+```python
+from PIL import Image
+import matplotlib.pyplot as plt
+
+# 쿼리 사용자와 매칭 결과 시각화
+fig, axes = plt.subplots(1, 6, figsize=(18, 3))
+
+# 쿼리 이미지
+query_img = Image.open(f'data/raw/profiles/{query_user}_1.jpg')
+axes[0].imshow(query_img)
+axes[0].set_title(f'Query: {query_user}')
+axes[0].axis('off')
+
+# Top-5 매칭
+for i, (match_id, sim) in enumerate(matches[:5], 1):
+    match_img = Image.open(f'data/raw/profiles/{match_id}_1.jpg')
+    axes[i].imshow(match_img)
+    axes[i].set_title(f'{match_id}\n{sim:.3f}')
+    axes[i].axis('off')
+
+plt.tight_layout()
+plt.savefig('logs/matching_results.png')
+plt.show()
+```
+
+### 4. 인덱스 저장 및 로드
+
+```python
+# 인덱스 저장
+engine.save_index('models/matching_index.pkl')
+
+# 나중에 로드
+engine_new = MatchingEngine.load_index(
+    'models/matching_index.pkl',
+    'models/saved_models/best_model.pth'
 )
-
-# 7. 개인화된 매칭 조회
-matches = matcher.find_matches('user_001', top_k=5)
-print("\nPersonalized matches for user_001:")
-for user_id, similarity in matches:
-    print(f"  {user_id}: {similarity:.4f}")
-
-# 8. 인덱스 저장
-matcher.save_index('models/faiss_index.bin', 'models/index_metadata.npy')
 ```
 
 ## 문제 해결
@@ -369,38 +418,53 @@ matcher.save_index('models/faiss_index.bin', 'models/index_metadata.npy')
 ```yaml
 # config.yaml에서 batch size 줄이기
 training:
-  batch_size: 16  # 32에서 16으로
+  batch_size: 8  # 16에서 8로 줄임
 ```
 
-### 얼굴 검출 실패
+또는 Gradient Accumulation 사용:
+
+```python
+# train_sagemaker.py에서
+gradient_accumulation_steps = 4  # Effective batch = 8 × 4 = 32
+```
+
+### 모델 다운로드 실패
+
+HuggingFace 토큰 설정:
 
 ```bash
-# 더 관대한 설정으로 재실행
-python src/data/preprocessing.py \
-    --input_dir data/raw/profiles \
-    --output_dir data/processed \
-    --metadata_csv data/raw/metadata.csv \
-    --output_metadata_csv data/processed/metadata.csv \
-    --min_quality 0.2  # 기본값 0.3에서 낮춤
+# SageMaker Terminal에서
+export HF_TOKEN=your_huggingface_token
+
+# 또는 Python에서
+from huggingface_hub import login
+login(token="your_token")
 ```
 
 ### 학습이 너무 느림
 
-```yaml
-# config.yaml에서 workers 수 조정
-data:
-  num_workers: 8  # CPU 코어 수에 맞게 조정
-```
+1. **Spot 인스턴스 사용**: 비용 70% 절감
+2. **Mixed Precision Training**: FP16 사용으로 2배 속도 향상
+3. **Vision Encoder Freeze**: Stage 1에서 freeze로 빠른 학습
 
 ## 다음 단계
 
-1. **데이터 증강**: 생성형 AI로 추가 데이터 생성
-2. **멀티태스크 학습**: 나이, 스타일 등 보조 태스크 추가
-3. **하이퍼파라미터 튜닝**: Optuna로 최적 파라미터 탐색
-4. **A/B 테스트**: 실제 환경에서 성능 검증
-5. **프로덕션 배포**: Docker, Kubernetes 활용
+### 프로젝트 완료 후
+
+1. **성능 분석**: 베이스라인 대비 개선 확인
+2. **보고서 작성**: 실험 결과 및 인사이트 정리
+3. **코드 정리**: 주석 추가 및 문서화
+
+### 향후 확장 (선택사항)
+
+1. **실제 사용자 피드백 수집**: 좋아요/패스 데이터로 재학습
+2. **멀티모달 확장**: 텍스트 프로필 정보 추가
+3. **API 서버 구축**: FastAPI로 REST API 제공
+4. **프로덕션 배포**: Docker + Kubernetes
 
 더 자세한 내용은 다음 문서를 참고하세요:
+
 - [아키텍처 설계](ARCHITECTURE.md)
 - [데이터 명세](DATA_SPEC.md)
-- [API 문서](http://localhost:8000/docs)
+- [SageMaker 가이드](SAGEMAKER_GUIDE.md)
+- [프로젝트 컨텍스트](PROJECT_CONTEXT.md)

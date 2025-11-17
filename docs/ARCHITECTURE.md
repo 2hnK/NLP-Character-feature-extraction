@@ -38,24 +38,27 @@
 Input Image (224x224x3)
         ↓
 ┌─────────────────────────────────────┐
-│     EfficientNet-B0 Backbone        │
-│  (Pretrained on ImageNet)           │
+│     Qwen3-VL-2B Vision Encoder      │
+│  (Pretrained Vision-Language Model) │
 │                                     │
-│  Conv2d → BatchNorm → Swish         │
-│  MBConv Blocks × 16                 │
-│  Global Average Pooling             │
+│  Patch Embedding (16×16 patches)    │
+│  Position Embedding                 │
+│  Vision Transformer Blocks × 24     │
+│    - Multi-Head Self-Attention      │
+│    - Feed-Forward Network           │
+│    - Layer Normalization            │
+│  [CLS] Token Extraction             │
 └────────────────┬────────────────────┘
                  ↓
-        Feature Map (1280-dim)
+        Feature Map (varies by model)
                  ↓
 ┌─────────────────────────────────────┐
-│      Embedding Head                 │
+│      Embedding Projection Head      │
 │                                     │
-│  Linear(1280 → 512)                 │
-│  BatchNorm1d                        │
-│  ReLU                               │
-│  Dropout(0.3)                       │
-│  Linear(512 → 512)                  │
+│  Linear(hidden_dim → 512)           │
+│  Layer Normalization                │
+│  GELU Activation                    │
+│  Dropout(0.1)                       │
 │  L2 Normalization                   │
 └────────────────┬────────────────────┘
                  ↓
@@ -98,31 +101,24 @@ Triplet Sampling
 Raw Images
     ↓
 ┌─────────────────────────┐
-│  Face Detection         │
-│  (MTCNN / RetinaFace)   │
-└────────┬────────────────┘
-         ↓
-┌─────────────────────────┐
-│  Face Alignment         │
-│  (Landmark-based)       │
-└────────┬────────────────┘
-         ↓
-┌─────────────────────────┐
-│  Crop & Resize          │
-│  (224x224)              │
+│  Resize to 224×224      │
+│  (Center crop if needed)│
 └────────┬────────────────┘
          ↓
 ┌─────────────────────────┐
 │  Data Augmentation      │
-│  - Random Crop          │
+│  - Random Horizontal    │
+│    Flip (p=0.5)         │
 │  - Color Jitter         │
-│  - Random Flip          │
-│  - Gaussian Blur        │
+│    (brightness, contrast)│
+│  - Random Rotation      │
+│    (±15 degrees)        │
 └────────┬────────────────┘
          ↓
 ┌─────────────────────────┐
 │  Normalization          │
-│  (ImageNet stats)       │
+│  (Model-specific stats) │
+│  - Qwen processor       │
 └────────┬────────────────┘
          ↓
     Training Batch
@@ -134,25 +130,24 @@ Raw Images
 User Profile Image
          ↓
 ┌─────────────────────────┐
-│  Face Detection         │
-│  + Alignment            │
-└────────┬────────────────┘
-         ↓
-┌─────────────────────────┐
 │  Preprocessing          │
-│  (Resize + Normalize)   │
+│  - Resize to 224×224    │
+│  - Qwen processor       │
+│  - Normalize            │
 └────────┬────────────────┘
          ↓
 ┌─────────────────────────┐
 │  Feature Extraction     │
-│  (Model Inference)      │
+│  - Qwen Vision Encoder  │
+│  - [CLS] Token          │
+│  - Projection Head      │
 └────────┬────────────────┘
          ↓
     512-dim Embedding
          ↓
 ┌─────────────────────────┐
 │  Store in Vector DB     │
-│  (Faiss Index)          │
+│  (Faiss Index or NumPy) │
 └─────────────────────────┘
 ```
 
@@ -225,19 +220,20 @@ User Actions (Likes/Passes)
 ### 1. Training Stages
 
 ```
-Stage 1: Warmup (5 epochs)
-├─ Freeze backbone
-├─ Train embedding head only
+Stage 1: Warmup (2-3 epochs)
+├─ Freeze vision encoder
+├─ Train projection head only
 └─ Learning rate: 1e-3
 
-Stage 2: Fine-tuning (20 epochs)
-├─ Unfreeze all layers
-├─ Learning rate: 1e-4
-└─ Cosine annealing
+Stage 2: Fine-tuning (10-15 epochs)
+├─ Unfreeze vision encoder (optional)
+├─ Fine-tune with Triplet Loss
+├─ Learning rate: 5e-5 to 1e-4
+└─ Linear warmup + cosine decay
 
-Stage 3: Refinement (25 epochs)
-├─ Add user feedback data
+Stage 3: Refinement (Optional)
 ├─ Hard negative mining
+├─ Additional augmented data
 └─ Learning rate: 1e-5
 ```
 
@@ -262,21 +258,24 @@ L_reg = λ * ||W||²  (Weight decay)
 ### 3. Batch Sampling Strategy
 
 ```
-Batch Construction (batch_size = 32)
+Batch Construction (batch_size = 16-32)
 
 For each batch:
-1. Sample 8 unique users (classes)
+1. Sample unique users (classes)
 2. For each user, sample:
    - 1 Anchor image
-   - 2 Positive images (matches)
-   - 1 Negative image (rejects)
+   - 1 Positive image (same user, different photo)
+   - 1 Negative image (different user)
 
-Total: 8 × 4 = 32 images per batch
+Online Triplet Mining:
+- All valid triplets within batch
+- Focus on semi-hard negatives
+- Dynamic triplet selection during training
 
 Ensures:
-✓ Rich triplets per batch
-✓ Balanced positive/negative ratio
-✓ Efficient GPU utilization
+✓ Efficient triplet generation
+✓ Challenging negative examples
+✓ Optimal GPU memory usage
 ```
 
 ## 벡터 검색 최적화

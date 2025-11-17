@@ -2,126 +2,121 @@
 
 ## 데이터셋 구조
 
+### 현재 프로젝트 데이터 규모
+
+```
+총 데이터: 3,300개 이미지
+├── 실제 사용자 이미지: 100개 (검증용)
+│   └── 사용자당 이미지: 1~3개 (평균 2장)
+└── 증강 이미지: 3,200개 (학습용)
+    └── 생성 방법: 생성형 AI (Stable Diffusion 등)
+
+목표 분할:
+├── Train: 약 2,800개 (실제 70개 + 증강 2,730개)
+├── Validation: 약 300개 (실제 20개 + 증강 280개)
+└── Test: 약 200개 (실제 10개 + 증강 190개)
+```
+
 ### 디렉토리 구성
 
 ```
 data/
 ├── raw/                          # 원본 데이터
-│   ├── profiles/                 # 실제 프로필 이미지
-│   │   ├── user_00001.jpg
-│   │   ├── user_00002.jpg
+│   ├── profiles/                 # 실제 프로필 이미지 (100개)
+│   │   ├── user_001_1.jpg
+│   │   ├── user_001_2.jpg
 │   │   └── ...
-│   └── metadata.csv              # 메타데이터
+│   └── augmented/                # 증강 이미지 (3,200개)
+│       ├── gen_0001.jpg
+│       ├── gen_0002.jpg
+│       └── ...
 │
-├── processed/                    # 전처리된 데이터
-│   ├── train/
-│   │   ├── images/               # 전처리된 이미지
-│   │   └── embeddings.npy        # 사전 계산된 임베딩 (선택)
-│   ├── val/
-│   └── test/
-│
-└── augmented/                    # 생성형 AI 증강 데이터
-    ├── synthetic/                # 완전 합성 이미지
-    └── enhanced/                 # 원본 기반 증강
+└── processed/                    # 전처리된 데이터
+    ├── train/
+    │   └── images/               # 전처리된 학습 이미지
+    ├── val/
+    │   └── images/               # 전처리된 검증 이미지
+    ├── train_metadata.csv        # 학습 메타데이터
+    └── val_metadata.csv          # 검증 메타데이터
 ```
 
 ## 메타데이터 형식
 
-### metadata.csv
+### metadata.csv (간소화 버전)
+
+프로젝트 초기 단계에서는 간단한 메타데이터만 사용합니다.
 
 | 컬럼명 | 타입 | 설명 | 예시 |
 |--------|------|------|------|
-| user_id | string | 고유 사용자 ID (익명화) | "usr_a3f9d2e1" |
-| image_path | string | 이미지 파일 경로 | "profiles/user_00001.jpg" |
-| gender | string | 성별 | "M", "F", "O" |
-| age | int | 나이 | 25 |
-| image_quality | float | 이미지 품질 점수 (0-1) | 0.85 |
-| face_detected | bool | 얼굴 검출 여부 | True |
-| face_confidence | float | 얼굴 검출 신뢰도 | 0.92 |
-| image_width | int | 이미지 너비 (픽셀) | 1024 |
-| image_height | int | 이미지 높이 (픽셀) | 1024 |
-| upload_date | datetime | 업로드 시간 | "2024-01-15 14:30:00" |
-| is_synthetic | bool | 합성 이미지 여부 | False |
-| source | string | 데이터 출처 | "real", "stable_diffusion", "midjourney" |
+| filename | string | 이미지 파일명 | "user_001_1.jpg" |
+| user_id | string | 고유 사용자 ID | "user_001" |
+| image_idx | int | 사용자별 이미지 인덱스 | 1 |
+| filepath | string | 전체 파일 경로 | "data/processed/train/user_001_1.jpg" |
+| is_synthetic | bool | 증강 이미지 여부 | False, True |
 
 **예시:**
+
 ```csv
-user_id,image_path,gender,age,face_detected,face_confidence,image_quality,is_synthetic,source
-usr_a3f9d2e1,profiles/user_00001.jpg,F,28,True,0.95,0.87,False,real
-usr_b7c4e8f2,profiles/user_00002.jpg,M,32,True,0.89,0.82,False,real
-usr_syn_0001,augmented/synthetic/img_0001.jpg,F,25,True,0.91,0.79,True,stable_diffusion
+filename,user_id,image_idx,filepath,is_synthetic
+user_001_1.jpg,user_001,1,data/processed/train/user_001_1.jpg,False
+user_001_2.jpg,user_001,2,data/processed/train/user_001_2.jpg,False
+gen_0001.jpg,gen_0001,1,data/processed/train/gen_0001.jpg,True
+gen_0002.jpg,gen_0002,1,data/processed/train/gen_0002.jpg,True
 ```
 
-## 행동 데이터 (User Interaction)
+### 확장 메타데이터 (향후 계획)
 
-### interactions.csv
+프로덕션 배포 시 추가할 수 있는 필드:
 
-매칭 성공/실패 기록을 저장하여 학습에 활용
-
-| 컬럼명 | 타입 | 설명 | 예시 |
-|--------|------|------|------|
-| interaction_id | string | 상호작용 ID | "int_x8d9a2" |
-| user_id | string | 행동한 사용자 | "usr_a3f9d2e1" |
-| target_user_id | string | 대상 사용자 | "usr_b7c4e8f2" |
-| action | string | 행동 유형 | "like", "pass", "match", "message" |
-| timestamp | datetime | 행동 시간 | "2024-01-15 15:45:30" |
-| is_mutual | bool | 상호 좋아요 여부 | True |
-| conversation_started | bool | 대화 시작 여부 | True |
-
-**예시:**
-```csv
-interaction_id,user_id,target_user_id,action,timestamp,is_mutual,conversation_started
-int_x8d9a2,usr_a3f9d2e1,usr_b7c4e8f2,like,2024-01-15 15:45:30,True,True
-int_y9e1b3,usr_a3f9d2e1,usr_c5f3g9h1,pass,2024-01-15 15:46:10,False,False
-int_z1f2c4,usr_b7c4e8f2,usr_a3f9d2e1,like,2024-01-15 15:47:00,True,True
-```
+| 컬럼명 | 타입 | 설명 |
+|--------|------|------|
+| gender | string | 성별 ("M", "F", "O") |
+| age | int | 나이 |
+| image_quality | float | 이미지 품질 점수 (0-1) |
+| face_detected | bool | 얼굴 검출 여부 |
+| upload_date | datetime | 업로드 시간 |
 
 ## 학습 데이터 구성
 
 ### Triplet 데이터셋
 
-학습 시 동적으로 생성하거나 사전 구성
+현재 프로젝트에서는 **동적 Triplet 생성** 방식을 사용합니다.
 
-#### triplets.csv (사전 구성 시)
+#### 동적 생성 방법
 
-| 컬럼명 | 타입 | 설명 |
-|--------|------|------|
-| anchor_id | string | Anchor 사용자 ID |
-| positive_id | string | Positive 사용자 ID (매칭 성공) |
-| negative_id | string | Negative 사용자 ID (매칭 실패) |
-| triplet_source | string | 생성 방법 |
-
-**생성 전략:**
-
-1. **Hard Negatives**: 유사하지만 매칭 실패한 프로필
-2. **Random Negatives**: 무작위 선택
-3. **Semi-hard Negatives**: 중간 거리의 네거티브
+학습 시 DataLoader에서 실시간으로 (Anchor, Positive, Negative) 조합 생성:
 
 ```python
-# 동적 생성 예시
-def create_triplet(user_id, interactions_df):
-    # Anchor
-    anchor = user_id
-
-    # Positive: 매칭 성공한 사용자
-    positives = interactions_df[
-        (interactions_df['user_id'] == user_id) &
-        (interactions_df['is_mutual'] == True)
-    ]['target_user_id'].tolist()
-
-    # Negative: 패스한 사용자
-    negatives = interactions_df[
-        (interactions_df['user_id'] == user_id) &
-        (interactions_df['action'] == 'pass')
-    ]['target_user_id'].tolist()
-
-    if len(positives) > 0 and len(negatives) > 0:
-        positive = random.choice(positives)
-        negative = random.choice(negatives)
-        return (anchor, positive, negative)
-
-    return None
+# TripletDataset 예시
+class TripletDataset:
+    def __getitem__(self, idx):
+        # 1. Anchor 선택
+        anchor_user = random.choice(user_ids)
+        anchor_img = random.choice(user_images[anchor_user])
+        
+        # 2. Positive 선택 (같은 사용자의 다른 이미지)
+        positive_img = random.choice([img for img in user_images[anchor_user] 
+                                      if img != anchor_img])
+        
+        # 3. Negative 선택 (다른 사용자)
+        negative_user = random.choice([u for u in user_ids if u != anchor_user])
+        negative_img = random.choice(user_images[negative_user])
+        
+        return anchor_img, positive_img, negative_img
 ```
+
+**장점:**
+- 사전 구성 불필요
+- 메모리 효율적
+- 매 epoch마다 다른 조합으로 학습
+
+### 향후 확장: 행동 데이터 기반 Triplet
+
+실제 사용자 피드백 데이터가 수집되면 활용 가능:
+
+- **Positive**: 실제로 매칭된 사용자
+- **Negative**: 패스한 사용자
+- **Hard Negative**: 비슷해 보이지만 거절당한 사용자
 
 ## 이미지 사양
 
@@ -200,51 +195,37 @@ nude, inappropriate, watermark"
 ### Train / Validation / Test Split
 
 ```
-전체 데이터셋 분할 비율:
-├─ Train: 70% (학습)
-├─ Validation: 15% (하이퍼파라미터 튜닝)
-└─ Test: 15% (최종 평가)
+현재 프로젝트 분할 (3,300개 기준):
+├─ Train: 약 2,800개 (85%)
+│  ├─ 실제: 70개
+│  └─ 증강: 2,730개
+├─ Validation: 약 300개 (9%)
+│  ├─ 실제: 20개
+│  └─ 증강: 280개
+└─ Test: 약 200개 (6%)
+   ├─ 실제: 10개
+   └─ 증강: 190개
 
 분할 기준:
 - 사용자 ID 기준 분할 (동일 사용자가 여러 split에 포함 방지)
-- 성별/나이 분포 유지 (Stratified Split)
-- 시간 기반 분할 (선택): 과거 데이터로 학습 → 최신 데이터로 테스트
-```
-
-### 데이터 개수 예시
-
-```
-Stage 1: MVP (Minimum Viable Product)
-├─ Train: 5,000 users × 1 image = 5,000 images
-├─ Val: 1,000 images
-└─ Test: 1,000 images
-
-Stage 2: Production
-├─ Train: 50,000 users × 1-3 images = 100,000 images
-├─ Val: 10,000 images
-└─ Test: 10,000 images
-
-Stage 3: Scale
-├─ Train: 500,000+ images
-├─ Val: 50,000 images
-└─ Test: 50,000 images
+- 증강 데이터는 실제 데이터와 비율 유지
 ```
 
 ## 데이터 품질 관리
 
-### 자동 필터링 기준
+### 자동 필터링 기준 (선택사항)
+
+현재 프로젝트에서는 기본적인 품질 검증만 수행합니다:
 
 ```python
 def filter_low_quality_images(metadata_df):
     """
-    품질 기준에 미달하는 이미지 필터링
+    기본 품질 기준 필터링
     """
     filtered = metadata_df[
-        (metadata_df['face_detected'] == True) &           # 얼굴 검출 필수
-        (metadata_df['face_confidence'] >= 0.8) &          # 검출 신뢰도 80% 이상
-        (metadata_df['image_quality'] >= 0.6) &            # 이미지 품질 60% 이상
-        (metadata_df['image_width'] >= 256) &              # 최소 해상도
-        (metadata_df['image_height'] >= 256)
+        (metadata_df['image_width'] >= 224) &    # 최소 해상도
+        (metadata_df['image_height'] >= 224) &
+        (metadata_df['file_size'] > 10000)       # 최소 파일 크기 (10KB)
     ]
     return filtered
 ```
@@ -252,14 +233,18 @@ def filter_low_quality_images(metadata_df):
 ### 데이터 검증 체크리스트
 
 ```
-□ 중복 이미지 제거 (perceptual hash 사용)
+□ 중복 이미지 제거
 □ 손상된 파일 제거 (PIL.Image.verify)
-□ 얼굴 미검출 이미지 제거
-□ 저해상도 이미지 제거 (< 256×256)
-□ 부적절한 콘텐츠 필터링 (NSFW classifier)
+□ 저해상도 이미지 제거 (< 224×224)
 □ 메타데이터 일관성 검증
 □ 파일명-메타데이터 매칭 확인
 ```
+
+### 향후 확장 (프로덕션 단계)
+
+- 얼굴 검출 신뢰도 기반 필터링
+- 이미지 품질 점수 계산
+- 부적절한 콘텐츠 필터링 (NSFW classifier)
 
 ## 임베딩 벡터 저장
 

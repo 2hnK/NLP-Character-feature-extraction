@@ -38,9 +38,9 @@ class Qwen3VLFeatureExtractor(nn.Module):
 
         self.model = AutoModelForVision2Seq.from_pretrained(
             model_name,
-            dtype=torch.float16,
+            torch_dtype=torch.float16,
             device_map="auto",
-        )
+        ).to(self.device)
 
         # Load processor
         self.processor = AutoProcessor.from_pretrained(model_name)
@@ -107,9 +107,9 @@ class Qwen3VLFeatureExtractor(nn.Module):
                 nn.GELU(),
                 nn.Dropout(0.1),
                 nn.Linear(self.embedding_dim * 2, self.embedding_dim),
-            )
+            ).to(self.device)
         else:
-            self.projection_head = nn.Identity()
+            self.projection_head = nn.Identity().to(self.device)
             self.embedding_dim = self.vision_hidden_size
 
     def extract_vision_features(self, inputs):
@@ -198,6 +198,9 @@ class Qwen3VLFeatureExtractor(nn.Module):
         # Extract vision features
         with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
             vision_features = self.extract_vision_features(inputs)
+
+        # Ensure features are on the same device as projection head
+        vision_features = vision_features.to(self.device)
 
         # Project to embedding space
         embeddings = self.projection_head(vision_features)
@@ -366,7 +369,11 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
                 nn.Linear(self.vision_hidden_size, self.embedding_dim),
                 nn.LayerNorm(self.embedding_dim),
                 nn.GELU()
-            )
+            ).to(self.device)
+
+        # Move to correct device before projection
+        vision_features = vision_features.to(self.device)
+        text_features = text_features.to(self.device)
 
         # Project features
         vision_emb = self.projection_head(vision_features)

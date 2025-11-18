@@ -45,35 +45,19 @@ class Qwen3VLFeatureExtractor(nn.Module):
         # Load processor
         self.processor = AutoProcessor.from_pretrained(model_name)
 
-        # Qwen3-VL config에서 사용할 hidden size 결정
-        cfg = self.model.config
+        # Hidden size will be determined lazily from the first forward pass
+        # by inspecting the hidden state tensor shape. Different Qwen3-VL
+        # configs may not expose a standard hidden_size field.
         self.vision_hidden_size = None
-        for attr in ("hidden_size", "vision_hidden_size", "text_hidden_size", "embed_dim"):
-            if hasattr(cfg, attr):
-                self.vision_hidden_size = getattr(cfg, attr)
-                break
-
-        if self.vision_hidden_size is None:
-            raise AttributeError(
-                f"Qwen3-VL config {cfg.__class__.__name__} has no suitable hidden size attribute"
-            )
 
         # Freeze vision encoder if requested
         if freeze_vision_encoder:
             self.freeze_vision_model()
 
-        # Projection head to map to desired embedding dimension
-        if use_projection_head:
-            self.projection_head = nn.Sequential(
-                nn.Linear(self.vision_hidden_size, embedding_dim * 2),
-                nn.LayerNorm(embedding_dim * 2),
-                nn.GELU(),
-                nn.Dropout(0.1),
-                nn.Linear(embedding_dim * 2, embedding_dim),
-            )
-        else:
-            self.projection_head = nn.Identity()
-            self.embedding_dim = self.vision_hidden_size
+        # Projection head will be lazily initialized once we know the
+        # actual hidden size from a forward pass.
+        self.use_projection_head = use_projection_head
+        self.projection_head = None
 
         self.normalize = True
 
@@ -109,6 +93,25 @@ class Qwen3VLFeatureExtractor(nn.Module):
             param.requires_grad = True
         print("Vision encoder unfrozen")
 
+    def _ensure_projection_head(self, hidden_dim: int) -> None:
+        """Lazily initialize projection head based on hidden dimension."""
+        if self.projection_head is not None:
+            return
+
+        self.vision_hidden_size = hidden_dim
+
+        if self.use_projection_head:
+            self.projection_head = nn.Sequential(
+                nn.Linear(self.vision_hidden_size, self.embedding_dim * 2),
+                nn.LayerNorm(self.embedding_dim * 2),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(self.embedding_dim * 2, self.embedding_dim),
+            )
+        else:
+            self.projection_head = nn.Identity()
+            self.embedding_dim = self.vision_hidden_size
+
     def extract_vision_features(self, inputs):
         """
         Extract features from vision encoder using the full model
@@ -134,6 +137,10 @@ class Qwen3VLFeatureExtractor(nn.Module):
         # Mean pooling over sequence length
         # Shape: [batch_size, seq_len, hidden_size] -> [batch_size, hidden_size]
         pooled_features = hidden_states.mean(dim=1)
+
+        # Initialize projection head based on hidden dimension
+        hidden_dim = pooled_features.shape[-1]
+        self._ensure_projection_head(hidden_dim)
 
         return pooled_features
 
@@ -293,12 +300,8 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Additional projection for text features
-        self.text_projection = nn.Sequential(
-            nn.Linear(self.vision_hidden_size, self.embedding_dim),
-            nn.LayerNorm(self.embedding_dim),
-            nn.GELU()
-        )
+        # Additional projection for text features (lazy init)
+        self.text_projection = None
 
     def forward_with_text(self, images, text_descriptions):
         """
@@ -352,6 +355,18 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
             # This is simplified - in practice, you might want to separate them differently
             vision_features = pooled_features
             text_features = pooled_features
+
+        # Ensure projection head is initialized based on hidden dimension
+        hidden_dim = vision_features.shape[-1]
+        self._ensure_projection_head(hidden_dim)
+
+        # Lazily initialize text projection if needed
+        if self.text_projection is None:
+            self.text_projection = nn.Sequential(
+                nn.Linear(self.vision_hidden_size, self.embedding_dim),
+                nn.LayerNorm(self.embedding_dim),
+                nn.GELU()
+            )
 
         # Project features
         vision_emb = self.projection_head(vision_features)

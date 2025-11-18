@@ -31,9 +31,8 @@ def test_model_loading():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Using device: {device}")
 
-        # Note: Qwen3-VL-2B-Instruct-FP8 may not exist yet
-        # Using Qwen2-VL-2B-Instruct as fallback
-        model_name = "Qwen/Qwen3-VL-2B-Instruct-FP8"
+        # Use Qwen3-VL-2B-Instruct (latest model)
+        model_name = "Qwen/Qwen3-VL-2B-Instruct"
 
         print(f"\nLoading model: {model_name}")
         print("This may take a few minutes on first run...")

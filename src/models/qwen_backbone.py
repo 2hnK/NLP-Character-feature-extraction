@@ -18,7 +18,7 @@ class Qwen3VLFeatureExtractor(nn.Module):
 
     def __init__(
         self,
-        model_name="Qwen/Qwen3-VL-2B-Instruct-FP8",
+        model_name="Qwen/Qwen3-VL-2B-Instruct",
         embedding_dim=512,
         freeze_vision_encoder=False,
         use_projection_head=True,
@@ -349,7 +349,7 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = Qwen3VLFeatureExtractor(
-        model_name="Qwen/Qwen3-VL-2B-Instruct-FP8",
+        model_name="Qwen/Qwen3-VL-2B-Instruct",
         embedding_dim=512,
         device=device
     )

@@ -68,7 +68,7 @@ prometheus-client>=0.17.0
 sentry-sdk>=1.28.0
 
 # Qwen3-VL and Transformers (Required for SageMaker)
-transformers>=4.45.0
+transformers>=4.57.0  # Required for Qwen3-VL
 qwen-vl-utils>=0.0.8
 accelerate>=0.24.0
 sentencepiece>=0.1.99

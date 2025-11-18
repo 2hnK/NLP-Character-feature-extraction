@@ -41,7 +41,7 @@ class PipelineTestConfig:
     image_size = 224
 
     # Model
-    model_name = "Qwen/Qwen2-VL-2B-Instruct"
+    model_name = "Qwen/Qwen3-VL-2B-Instruct"
     embedding_dim = 512
     freeze_vision = True  # Freeze for faster testing
 

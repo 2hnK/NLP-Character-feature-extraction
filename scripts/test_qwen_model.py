@@ -126,10 +126,13 @@ def test_batch_inference(model, device):
 
         # Check pairwise distances
         from torch.nn.functional import cosine_similarity
-
-        # Compute similarity between first two embeddings
-        sim = cosine_similarity(embeddings[0:1], embeddings[1:2]).item()
-        print(f"\n  - Cosine similarity between image 0 and 1: {sim:.4f}")
+        # 방어 코드: 배치 크기가 2개 미만이면 유사도 계산을 건너뜀
+        if embeddings.size(0) < 2:
+            print("\n  ⚠ Warning: Less than 2 embeddings in batch; skipping similarity check.")
+        else:
+            # Compute similarity between first two embeddings
+            sim = cosine_similarity(embeddings[0:1], embeddings[1:2]).item()
+            print(f"\n  - Cosine similarity between image 0 and 1: {sim:.4f}")
 
         return embeddings
 

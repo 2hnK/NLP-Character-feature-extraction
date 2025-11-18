@@ -33,7 +33,7 @@ def test_model_loading():
 
         # Note: Qwen3-VL-2B-Instruct-FP8 may not exist yet
         # Using Qwen2-VL-2B-Instruct as fallback
-        model_name = "Qwen/Qwen2-VL-2B-Instruct"
+        model_name = "Qwen/Qwen3-VL-2B-Instruct-FP8"
 
         print(f"\nLoading model: {model_name}")
         print("This may take a few minutes on first run...")

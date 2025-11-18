@@ -45,8 +45,18 @@ class Qwen3VLFeatureExtractor(nn.Module):
         # Load processor
         self.processor = AutoProcessor.from_pretrained(model_name)
 
-        # Qwen3-VL의 hidden size (모달리티 통합 후 차원)
-        self.vision_hidden_size = self.model.config.hidden_size
+        # Qwen3-VL config에서 사용할 hidden size 결정
+        cfg = self.model.config
+        self.vision_hidden_size = None
+        for attr in ("hidden_size", "vision_hidden_size", "text_hidden_size", "embed_dim"):
+            if hasattr(cfg, attr):
+                self.vision_hidden_size = getattr(cfg, attr)
+                break
+
+        if self.vision_hidden_size is None:
+            raise AttributeError(
+                f"Qwen3-VL config {cfg.__class__.__name__} has no suitable hidden size attribute"
+            )
 
         # Freeze vision encoder if requested
         if freeze_vision_encoder:
@@ -285,7 +295,7 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
 
         # Additional projection for text features
         self.text_projection = nn.Sequential(
-            nn.Linear(self.model.config.hidden_size, self.embedding_dim),
+            nn.Linear(self.vision_hidden_size, self.embedding_dim),
             nn.LayerNorm(self.embedding_dim),
             nn.GELU()
         )

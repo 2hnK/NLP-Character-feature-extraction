@@ -258,11 +258,31 @@ class Qwen3VLFeatureExtractor(nn.Module):
             device=device
         )
 
-        # Load projection head weights (vision model already loaded from HF)
+        # Projection head is now lazily initialized based on hidden size.
+        # To load its weights, we must ensure it's created first.
         if 'projection_head_state_dict' in checkpoint:
+            # Trigger lazy init with the stored hidden size if available,
+            # otherwise run a tiny dummy forward once.
+            vision_hidden_size = config.get('vision_hidden_size')
+            if vision_hidden_size is not None and model.projection_head is None:
+                model._ensure_projection_head(int(vision_hidden_size))
+
+            if model.projection_head is None:
+                # As a fallback, run a minimal dummy forward to infer hidden size
+                from PIL import Image
+                import numpy as np
+
+                dummy_image = Image.fromarray(
+                    np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+                )
+
+                with torch.no_grad():
+                    _ = model.forward([dummy_image])
+
             model.projection_head.load_state_dict(checkpoint['projection_head_state_dict'])
+
         elif 'model_state_dict' in checkpoint:
-            # Load full state dict
+            # Load full state dict (backbone + projection)
             model.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
         model.eval()

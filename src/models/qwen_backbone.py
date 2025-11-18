@@ -4,16 +4,12 @@ Qwen3-VL Vision-Language Model Integration for Profile Feature Extraction
 
 import torch
 import torch.nn as nn
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from transformers import AutoModelForVision2Seq, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
 
 class Qwen3VLFeatureExtractor(nn.Module):
-    """
-    Feature extractor using Qwen3-VL-2B-Instruct-FP8 model
-
-    This model extracts visual features from profile images using
-    a pre-trained vision-language model.
+    """Feature extractor using Qwen3-VL model.
     """
 
     def __init__(
@@ -40,18 +36,16 @@ class Qwen3VLFeatureExtractor(nn.Module):
 
         print(f"Loading Qwen3-VL model: {model_name}")
 
-        # Load model with FP8 quantization support
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+        self.model = AutoModelForVision2Seq.from_pretrained(
             model_name,
-            torch_dtype=torch.float16,  # FP16 for efficiency
-            device_map="auto"
+            dtype=torch.float16,
+            device_map="auto",
         )
 
         # Load processor
         self.processor = AutoProcessor.from_pretrained(model_name)
 
-        # Get model hidden size (we use the main model's hidden size, not just vision)
-        # Since we extract from the full model's hidden states
+        # Qwen3-VL의 hidden size (모달리티 통합 후 차원)
         self.vision_hidden_size = self.model.config.hidden_size
 
         # Freeze vision encoder if requested
@@ -75,13 +69,33 @@ class Qwen3VLFeatureExtractor(nn.Module):
 
     def freeze_vision_model(self):
         """Freeze vision encoder parameters"""
-        for param in self.model.visual.parameters():
+        visual_module = None
+        for attr in ("visual", "vision_tower", "vision_model"):
+            if hasattr(self.model, attr):
+                visual_module = getattr(self.model, attr)
+                break
+
+        if visual_module is None:
+            print("[WARN] Could not find vision submodule to freeze; skipping.")
+            return
+
+        for param in visual_module.parameters():
             param.requires_grad = False
         print("Vision encoder frozen")
 
     def unfreeze_vision_model(self):
         """Unfreeze vision encoder parameters"""
-        for param in self.model.visual.parameters():
+        visual_module = None
+        for attr in ("visual", "vision_tower", "vision_model"):
+            if hasattr(self.model, attr):
+                visual_module = getattr(self.model, attr)
+                break
+
+        if visual_module is None:
+            print("[WARN] Could not find vision submodule to unfreeze; skipping.")
+            return
+
+        for param in visual_module.parameters():
             param.requires_grad = True
         print("Vision encoder unfrozen")
 

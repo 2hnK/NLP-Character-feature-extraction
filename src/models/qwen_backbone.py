@@ -101,13 +101,14 @@ class Qwen3VLFeatureExtractor(nn.Module):
         self.vision_hidden_size = hidden_dim
 
         if self.use_projection_head:
+            # Keep projection head in float32 for numerical stability
             self.projection_head = nn.Sequential(
                 nn.Linear(self.vision_hidden_size, self.embedding_dim * 2),
                 nn.LayerNorm(self.embedding_dim * 2),
                 nn.GELU(),
                 nn.Dropout(0.1),
                 nn.Linear(self.embedding_dim * 2, self.embedding_dim),
-            ).to(self.device)
+            ).to(self.device).float()
         else:
             self.projection_head = nn.Identity().to(self.device)
             self.embedding_dim = self.vision_hidden_size
@@ -137,6 +138,10 @@ class Qwen3VLFeatureExtractor(nn.Module):
         # Mean pooling over sequence length
         # Shape: [batch_size, seq_len, hidden_size] -> [batch_size, hidden_size]
         pooled_features = hidden_states.mean(dim=1)
+
+        # Work in float32 for the projection head to avoid
+        # dtype mismatches with the half-precision backbone.
+        pooled_features = pooled_features.to(torch.float32)
 
         # Initialize projection head based on hidden dimension
         hidden_dim = pooled_features.shape[-1]
@@ -365,11 +370,12 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
 
         # Lazily initialize text projection if needed
         if self.text_projection is None:
+            # Text projection also uses float32
             self.text_projection = nn.Sequential(
                 nn.Linear(self.vision_hidden_size, self.embedding_dim),
                 nn.LayerNorm(self.embedding_dim),
                 nn.GELU()
-            ).to(self.device)
+            ).to(self.device).float()
 
         # Move to correct device before projection
         vision_features = vision_features.to(self.device)

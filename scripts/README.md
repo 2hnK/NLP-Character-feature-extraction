@@ -122,6 +122,22 @@ python scripts/test_pipeline.py --skip_cleanup
 
 **예상 소요 시간:** 10-15분
 
+### 5. `preprocess_jsonl.py`
+JSONL 메타데이터 전처리 (파일명 추가, 텍스트 포맷팅, 라벨 매핑 생성)
+
+**사용법:**
+```bash
+python scripts/preprocess_jsonl.py \
+    --input enhanced_train_batch_44_94.jsonl \
+    --output train_processed.jsonl \
+    --mapping_output label_mapping.json
+```
+
+**기능:**
+- `filename` 필드 추가 (`aug_00000.jpg` 형식)
+- `text_input` 필드 생성 (Style, Features, Vibe 결합)
+- `label_mapping.json` 생성 (Style 문자열 -> 정수 인덱스 매핑)
+
 ---
 
 ## 🚀 빠른 시작 가이드

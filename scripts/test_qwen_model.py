@@ -1,11 +1,11 @@
 """
-Test script for Qwen3-VL model loading and basic inference
+Qwen3-VL 모델 로드 및 기본 추론 테스트 스크립트
 
-This script tests:
-1. Model loading from HuggingFace
-2. Processor initialization
-3. Basic forward pass with dummy image
-4. Embedding extraction
+이 스크립트는 다음 항목을 테스트합니다:
+1. HuggingFace로부터 모델 로드
+2. 프로세서 초기화
+3. 더미 이미지를 사용한 기본 Forward Pass
+4. 임베딩 추출 기능 확인
 """
 
 import sys

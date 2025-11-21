@@ -1,10 +1,10 @@
 """
-Prepare metadata for training
+학습용 메타데이터 준비 스크립트
 
-This script:
-1. Loads raw metadata
-2. Splits into train/validation sets
-3. Creates processed metadata CSVs
+이 스크립트는 다음 작업을 수행합니다:
+1. 원본 메타데이터 로드
+2. Train/Validation 데이터셋 분할
+3. 처리된 메타데이터 CSV 파일 생성
 """
 
 import os

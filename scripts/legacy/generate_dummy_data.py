@@ -1,10 +1,10 @@
 """
-Generate dummy dataset for testing the pipeline
+파이프라인 테스트를 위한 더미 데이터 생성 스크립트 (Legacy)
 
-This script generates:
-1. Dummy profile images (colored rectangles with user IDs)
-2. Metadata CSV files
-3. Interactions CSV (for triplet training)
+이 스크립트는 다음을 생성합니다:
+1. 더미 프로필 이미지 (색상 사각형 및 사용자 ID 텍스트)
+2. 메타데이터 CSV 파일
+3. 상호작용(Interactions) CSV (Triplet 학습용)
 """
 
 import os

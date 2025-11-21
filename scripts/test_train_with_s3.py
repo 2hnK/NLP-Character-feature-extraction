@@ -1,5 +1,11 @@
 """
-Test script for training loop with S3 data loading
+S3 데이터 로딩 및 학습 루프 통합 테스트 스크립트
+
+이 스크립트는 다음 항목을 검증합니다:
+1. AWS S3 데이터셋 연결 및 데이터 로딩
+2. Qwen3-VL 모델 초기화
+3. DataLoader 생성 및 배치 처리
+4. Forward/Backward Pass 및 Optimizer Step 실행 (학습 루프 정상 작동 여부)
 """
 
 import sys

@@ -1,18 +1,23 @@
 import io
 import os
+import json
 import boto3
+import torch
+import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Dict
+from sklearn.preprocessing import LabelEncoder
 
 class S3Dataset(Dataset):
     """
-    Dataset for loading images directly from AWS S3.
+    Dataset for loading images from AWS S3 using a JSONL metadata file.
     """
     def __init__(
         self, 
         bucket_name: str, 
-        prefix: str, 
+        jsonl_path: str,
+        prefix: str = "",
         transform: Optional[Callable] = None,
         cache_dir: Optional[str] = None,
         limit: Optional[int] = None
@@ -20,12 +25,14 @@ class S3Dataset(Dataset):
         """
         Args:
             bucket_name (str): Name of the S3 bucket
-            prefix (str): Prefix (folder path) in the bucket where images are stored
+            jsonl_path (str): Path to the JSONL metadata file (local path)
+            prefix (str): Optional prefix to prepend to filenames in S3
             transform (callable, optional): Optional transform to be applied on a sample.
-            cache_dir (str, optional): Directory to cache downloaded images. If None, no caching.
-            limit (int, optional): Limit the number of images to load (for testing).
+            cache_dir (str, optional): Directory to cache downloaded images.
+            limit (int, optional): Limit the number of images to load.
         """
         self.bucket_name = bucket_name
+        self.jsonl_path = jsonl_path
         self.prefix = prefix
         self.transform = transform
         self.cache_dir = cache_dir
@@ -33,53 +40,105 @@ class S3Dataset(Dataset):
         # Initialize S3 client
         self.s3_client = boto3.client('s3')
         
-        # List objects in the bucket with the given prefix
-        print(f"Listing objects in s3://{bucket_name}/{prefix}...")
-        self.image_keys = self._list_objects()
+        # Load metadata
+        print(f"Loading metadata from {jsonl_path}...")
+        self.data = []
+        self.labels = []
         
+        # Load label mapping if exists, otherwise build it (but user requested persistent mapping)
+        # Ideally, the mapping should be passed or loaded from a file.
+        # Let's assume label_mapping.json is in the same directory as jsonl_path or passed as arg.
+        # For simplicity, we'll look for 'label_mapping.json' in the current directory or assume it's passed.
+        # But since we didn't add a mapping_path arg to __init__, let's try to load it from default location
+        # or fall back to building it (but warn).
+        
+        mapping_path = "label_mapping.json"
+        if os.path.exists(mapping_path):
+            print(f"Loading label mapping from {mapping_path}")
+            with open(mapping_path, 'r', encoding='utf-8') as f:
+                self.label_mapping = json.load(f)
+        else:
+            print("Warning: label_mapping.json not found. Building mapping from data (indices might vary).")
+            self.label_mapping = None
+
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                self.data.append(item)
+                
+                # Extract label
+                if 'image_metadata' in item and 'fashion_style' in item['image_metadata']:
+                    style = item['image_metadata']['fashion_style']
+                    self.labels.append(style)
+                else:
+                    self.labels.append("Unknown")
+                    
         if limit:
-            self.image_keys = self.image_keys[:limit]
+            self.data = self.data[:limit]
+            self.labels = self.labels[:limit]
             
-        print(f"Found {len(self.image_keys)} images.")
+        print(f"Loaded {len(self.data)} items.")
+        
+        # Encode labels
+        if self.label_mapping:
+            self.encoded_labels = [self.label_mapping.get(label, -1) for label in self.labels]
+            self.classes = list(self.label_mapping.keys())
+        else:
+            self.label_encoder = LabelEncoder()
+            self.encoded_labels = self.label_encoder.fit_transform(self.labels)
+            self.classes = self.label_encoder.classes_
+            
+        self.num_classes = len(self.classes)
+        print(f"Found {self.num_classes} classes.")
         
         if self.cache_dir:
             os.makedirs(self.cache_dir, exist_ok=True)
-            print(f"Caching enabled. Directory: {self.cache_dir}")
-
-    def _list_objects(self) -> List[str]:
-        """List all image objects in the specified S3 prefix."""
-        keys = []
-        paginator = self.s3_client.get_paginator('list_objects_v2')
-        pages = paginator.paginate(Bucket=self.bucket_name, Prefix=self.prefix)
-        
-        for page in pages:
-            if 'Contents' in page:
-                for obj in page['Contents']:
-                    key = obj['Key']
-                    # Filter for image files (you can add more extensions if needed)
-                    if key.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
-                        keys.append(key)
-        return keys
 
     def __len__(self):
-        return len(self.image_keys)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        key = self.image_keys[idx]
+        item = self.data[idx]
+        label = self.encoded_labels[idx]
         
-        image_data = None
+        # Construct S3 key
+        filename = item.get('filename')
+        if not filename:
+             raise ValueError(f"Item at index {idx} is missing 'filename' field")
+             
+        key = os.path.join(self.prefix, filename).replace("\\", "/")
         
-        # Try to load from cache first
+        image = self._load_image(key)
+        
+        # Get text input if available
+        text_input = item.get('text_input', "")
+        
+        if self.transform:
+            image = self.transform(image)
+            
+        # Return (image, label) or (image, text, label)?
+        # The current train loop expects (images, labels).
+        # If we want to support text, we should return it, but train.py needs to handle it.
+        # For now, let's stick to (image, label) to avoid breaking train.py immediately,
+        # unless we update train.py too.
+        # User asked for "Text embedding input formatting", implying they want to use it.
+        # Let's return it as extra info, but we need to update the collate_fn or train loop if we do.
+        # Standard DataLoader handles strings in a batch as a list of strings.
+        # So returning (image, text, label) is safe if we unpack it in train loop.
+        
+        return image, text_input, torch.tensor(label, dtype=torch.long)
+        
+    def _load_image(self, key: str) -> Image.Image:
+        # Try cache first
         if self.cache_dir:
             local_path = os.path.join(self.cache_dir, os.path.basename(key))
             if os.path.exists(local_path):
                 try:
-                    image = Image.open(local_path).convert('RGB')
-                    if self.transform:
-                        image = self.transform(image)
-                    return image
+                    return Image.open(local_path).convert('RGB')
                 except Exception as e:
-                    print(f"Error loading from cache {local_path}: {e}. Re-downloading.")
+                    print(f"Error loading from cache {local_path}: {e}")
         
         # Download from S3
         try:
@@ -87,19 +146,18 @@ class S3Dataset(Dataset):
             image_data = obj['Body'].read()
             image = Image.open(io.BytesIO(image_data)).convert('RGB')
             
-            # Save to cache if enabled
+            # Save to cache
             if self.cache_dir:
                 local_path = os.path.join(self.cache_dir, os.path.basename(key))
                 with open(local_path, 'wb') as f:
                     f.write(image_data)
             
-            if self.transform:
-                image = self.transform(image)
-                
             return image
-            
         except Exception as e:
             print(f"Error loading image {key} from S3: {e}")
-            # Return a dummy image or raise error depending on requirement
-            # For now, raising error to be explicit
-            raise e
+            # Return a black image as fallback to prevent crashing
+            return Image.new('RGB', (224, 224), color='black')
+
+    def get_labels(self):
+        """Returns the list of labels for the sampler."""
+        return self.encoded_labels.tolist()

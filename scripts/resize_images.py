@@ -1,14 +1,14 @@
 """
-Resize large images to target size for efficient training
+효율적인 학습을 위한 대용량 이미지 리사이징 스크립트
 
-This script:
-1. Reads images from input directory
-2. Resizes them to target size (default 224x224)
-3. Saves resized images to output directory
-4. Preserves directory structure
-5. Optionally applies quality assessment
+이 스크립트는 다음 작업을 수행합니다:
+1. 입력 디렉토리에서 이미지 읽기
+2. 타겟 크기(기본 224x224)로 리사이징
+3. 출력 디렉토리에 저장
+4. 디렉토리 구조 유지
+5. 품질 검사 (옵션)
 
-Use this for preprocessing very large images (e.g., 2048x2048)
+매우 큰 이미지(예: 2048x2048)를 전처리할 때 사용합니다.
 """
 
 import os

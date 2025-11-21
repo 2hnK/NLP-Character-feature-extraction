@@ -1,13 +1,13 @@
 """
-End-to-end pipeline test
+End-to-End 파이프라인 테스트 스크립트 (Legacy)
 
-This script tests the complete pipeline:
-1. Generate dummy data
-2. Prepare metadata
-3. Create data loaders
-4. Load model
-5. Run training loop (1 epoch)
-6. Evaluate model
+이 스크립트는 전체 파이프라인을 테스트합니다:
+1. 더미 데이터 생성
+2. 메타데이터 준비
+3. DataLoader 생성
+4. 모델 로드
+5. 학습 루프 실행 (1 Epoch)
+6. 모델 평가
 """
 
 import sys

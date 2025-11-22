@@ -201,8 +201,13 @@ class Qwen3VLFeatureExtractor(nn.Module):
             }
 
         # Extract vision features
-        with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
-            vision_features = self.extract_vision_features(inputs)
+        # Extract vision features
+        # Autocast removed to prevent "Unexpected floating ScalarType" error
+        # Ensure floating point inputs are cast to model's dtype (float16)
+        if 'pixel_values' in inputs and inputs['pixel_values'].dtype != self.model.dtype:
+            inputs['pixel_values'] = inputs['pixel_values'].to(dtype=self.model.dtype)
+
+        vision_features = self.extract_vision_features(inputs)
 
         # Ensure features are on the same device as projection head
         vision_features = vision_features.to(self.device)
@@ -371,18 +376,22 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
         inputs = inputs.to(self.device)
 
         # Forward pass
-        with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
-            outputs = self.model(**inputs, output_hidden_states=True, return_dict=True)
+        # Forward pass
+        # Ensure inputs are in correct dtype
+        if 'pixel_values' in inputs and inputs['pixel_values'].dtype != self.model.dtype:
+            inputs['pixel_values'] = inputs['pixel_values'].to(dtype=self.model.dtype)
 
-            # Get features from hidden states (already includes both vision and text)
-            # For multimodal, we use the combined representation
-            hidden_states = outputs.hidden_states[-1]  # Last layer
-            pooled_features = hidden_states.mean(dim=1)
+        outputs = self.model(**inputs, output_hidden_states=True, return_dict=True)
 
-            # Split into vision and text features
-            # This is simplified - in practice, you might want to separate them differently
-            vision_features = pooled_features
-            text_features = pooled_features
+        # Get features from hidden states (already includes both vision and text)
+        # For multimodal, we use the combined representation
+        hidden_states = outputs.hidden_states[-1]  # Last layer
+        pooled_features = hidden_states.mean(dim=1)
+
+        # Split into vision and text features
+        # This is simplified - in practice, you might want to separate them differently
+        vision_features = pooled_features
+        text_features = pooled_features
 
         # Ensure projection head is initialized based on hidden dimension
         hidden_dim = vision_features.shape[-1]

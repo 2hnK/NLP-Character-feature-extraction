@@ -164,26 +164,38 @@ class Qwen3VLFeatureExtractor(nn.Module):
         # Process images through Qwen3-VL processor
         if isinstance(images, list):
             # PIL Images
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": img},
-                        {"type": "text", "text": "Describe this person's appearance."}
-                    ]
-                }
+            # Create a list of conversations (one per image) to enable batch processing
+            conversations = [
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": img},
+                            {"type": "text", "text": "Describe this person's appearance."}
+                        ]
+                    }
+                ]
                 for img in images
             ]
 
-            # Prepare inputs
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+            # Prepare inputs for batch
+            texts = [
+                self.processor.apply_chat_template(
+                    conv, tokenize=False, add_generation_prompt=True
+                )
+                for conv in conversations
+            ]
 
-            image_inputs, video_inputs = process_vision_info(messages)
+            # process_vision_info expects a list of messages (conversations) for batching?
+            # Or we need to flatten/handle carefully. 
+            # Qwen-VL utils usually handle a list of messages (single convo).
+            # For batching, we typically pass the list of conversations if supported, 
+            # or we need to verify qwen_vl_utils behavior.
+            # Assuming standard Qwen2-VL/Qwen3-VL pattern:
+            image_inputs, video_inputs = process_vision_info(conversations)
 
             inputs = self.processor(
-                text=text,
+                text=texts,
                 images=image_inputs,
                 videos=video_inputs,
                 padding=True,

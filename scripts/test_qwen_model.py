@@ -181,6 +181,9 @@ def test_checkpoint_save_load(model, device):
             np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
         )
 
+        # Ensure original model is in eval mode for fair comparison
+        model.eval()
+        
         with torch.no_grad():
             original_emb = model.forward([dummy_image])
             loaded_emb = loaded_model.forward([dummy_image])

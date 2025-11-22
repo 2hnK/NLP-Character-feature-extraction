@@ -20,7 +20,8 @@ class S3Dataset(Dataset):
         prefix: str = "",
         transform: Optional[Callable] = None,
         cache_dir: Optional[str] = None,
-        limit: Optional[int] = None
+        limit: Optional[int] = None,
+        label_mapping: Optional[Dict[str, int]] = None
     ):
         """
         Args:
@@ -30,12 +31,14 @@ class S3Dataset(Dataset):
             transform (callable, optional): Optional transform to be applied on a sample.
             cache_dir (str, optional): Directory to cache downloaded images.
             limit (int, optional): Limit the number of images to load.
+            label_mapping (dict, optional): Dictionary mapping label names to integers.
         """
         self.bucket_name = bucket_name
         self.jsonl_path = jsonl_path
         self.prefix = prefix
         self.transform = transform
         self.cache_dir = cache_dir
+        self.label_mapping = label_mapping
         
         # Initialize S3 client
         self.s3_client = boto3.client('s3')
@@ -47,19 +50,19 @@ class S3Dataset(Dataset):
         
         # Load label mapping if exists, otherwise build it (but user requested persistent mapping)
         # Ideally, the mapping should be passed or loaded from a file.
-        # Let's assume label_mapping.json is in the same directory as jsonl_path or passed as arg.
-        # For simplicity, we'll look for 'label_mapping.json' in the current directory or assume it's passed.
-        # But since we didn't add a mapping_path arg to __init__, let's try to load it from default location
-        # or fall back to building it (but warn).
         
-        mapping_path = "label_mapping.json"
-        if os.path.exists(mapping_path):
-            print(f"Loading label mapping from {mapping_path}")
-            with open(mapping_path, 'r', encoding='utf-8') as f:
-                self.label_mapping = json.load(f)
+        if hasattr(self, 'label_mapping') and self.label_mapping:
+             # Already set via argument (see below)
+             pass
         else:
-            print("Warning: label_mapping.json not found. Building mapping from data (indices might vary).")
-            self.label_mapping = None
+            mapping_path = "label_mapping.json"
+            if os.path.exists(mapping_path):
+                print(f"Loading label mapping from {mapping_path}")
+                with open(mapping_path, 'r', encoding='utf-8') as f:
+                    self.label_mapping = json.load(f)
+            else:
+                print("Warning: label_mapping.json not found. Building mapping from data (indices might vary).")
+                self.label_mapping = None
 
         with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line in f:

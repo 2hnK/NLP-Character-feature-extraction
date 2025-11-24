@@ -72,9 +72,14 @@ def test_s3_training_loop():
 
         # 4. Create DataLoader
         print("\n3. Creating DataLoader...")
-        # Custom collate function might be needed if we want to pass list of PIL images
+        # 4. Create DataLoader
+        print("\n3. Creating DataLoader...")
+        # Custom collate function to handle (image, text, label) tuples
         def collate_fn(batch):
-            return batch # Returns list of PIL images
+            images = [item[0] for item in batch]
+            texts = [item[1] for item in batch]
+            labels = torch.stack([item[2] for item in batch])
+            return images, texts, labels
 
         dataloader = DataLoader(
             dataset, 
@@ -91,10 +96,11 @@ def test_s3_training_loop():
         # Simple optimizer
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
         
-        for i, batch_images in enumerate(dataloader):
+        for i, (batch_images, batch_texts, batch_labels) in enumerate(dataloader):
             print(f"  Batch {i+1}: {len(batch_images)} images")
             
             # Forward pass
+            # Qwen backbone expects list of PIL images
             embeddings = model.forward(batch_images)
             print(f"    - Embeddings shape: {embeddings.shape}")
             

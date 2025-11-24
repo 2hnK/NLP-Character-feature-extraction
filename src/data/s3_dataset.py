@@ -43,6 +43,20 @@ class S3Dataset(Dataset):
         # Initialize S3 client
         self.s3_client = boto3.client('s3')
         
+        # Check if jsonl_path exists locally, if not try to download from S3
+        if not os.path.exists(jsonl_path):
+            print(f"Metadata file '{jsonl_path}' not found locally. Attempting to download from S3 bucket '{bucket_name}'...")
+            try:
+                # Ensure directory exists
+                local_dir = os.path.dirname(jsonl_path)
+                if local_dir:
+                    os.makedirs(local_dir, exist_ok=True)
+                
+                self.s3_client.download_file(bucket_name, jsonl_path, jsonl_path)
+                print(f"Successfully downloaded '{jsonl_path}' from S3.")
+            except Exception as e:
+                raise FileNotFoundError(f"Could not find '{jsonl_path}' locally or download from S3. Error: {e}")
+
         # Load metadata
         print(f"Loading metadata from {jsonl_path}...")
         self.data = []

@@ -55,12 +55,6 @@
   python scripts/preprocess_jsonl.py --input <input.jsonl> --output <output.jsonl> --mapping_output <mapping.json>
   ```
 
-### `prepare_metadata.py`
-**역할**: 메타데이터 CSV 등을 정리하거나 분할하는 유틸리티입니다. (현재 프로젝트 구조에 맞춰 사용 필요)
-
-### `resize_images.py`
-**역할**: 이미지 리사이징을 수행하는 유틸리티 스크립트입니다. 대용량 이미지 처리 시 사용됩니다.
-
 ### `train.py`
 **역할**: Triplet Loss를 이용한 메인 학습 스크립트입니다.
 - **기능**:

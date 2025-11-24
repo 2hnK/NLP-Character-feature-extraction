@@ -11,8 +11,9 @@ Qwen3-VL 모델 학습 스크립트 (Triplet Loss 적용)
 
 import sys
 import os
-import argparse
 import logging
+from dataclasses import dataclass
+from typing import Optional
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
@@ -322,46 +323,57 @@ def train(args):
 
     logger.info("Training complete!")
 
+# ==========================================
+# 설정 (Configuration)
+# ==========================================
+@dataclass
+class Config:
+    # 1. Train Data params
+    bucket_name: str = "sometimes-ki-datasets"
+    prefix: str = "dataset/qwen-vl-train-v1/images/"
+    jsonl_path: str = "train_processed.jsonl"
+    
+    # 2. Validation Data params
+    val_bucket: Optional[str] = None  # None이면 bucket_name과 동일하게 사용
+    val_prefix: Optional[str] = None  # None이면 prefix와 동일하게 사용
+    val_jsonl: Optional[str] = None   # 검증 데이터셋 JSONL 경로 (None이면 검증 스킵)
+    val_batch_size: int = 32
+    
+    cache_dir: str = "./s3_cache"
+    
+    # 3. Sampler params (Batch Size = p * k)
+    p: int = 8  # 클래스(스타일) 개수
+    k: int = 4  # 클래스당 샘플 개수
+    
+    # 4. Model params
+    model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
+    embedding_dim: int = 1536
+    projection_hidden_dim: int = 1024
+    projection_output_dim: int = 128
+    freeze_vision: bool = False
+    
+    # 5. Training params
+    epochs: int = 10
+    learning_rate: float = 1e-4
+    image_size: int = 224
+    num_workers: int = 0
+    margin: float = 0.2
+    miner_type: str = "semihard"  # choices=["all", "hard", "semihard", "easy"]
+    
+    # 6. Output params
+    output_dir: str = "./checkpoints"
+    save_interval: int = 5
+
 def main():
-    parser = argparse.ArgumentParser(description="Train Qwen3-VL Model with Triplet Loss")
+    # 설정값 인스턴스 생성
+    # 위 Config 클래스의 값을 수정하여 설정을 변경하세요.
+    args = Config()
     
-    # Train Data params
-    parser.add_argument("--bucket_name", type=str, default="sometimes-ki-datasets", help="S3 Bucket Name")
-    parser.add_argument("--prefix", type=str, default="dataset/qwen-vl-train-v1/images/", help="S3 Prefix for Train")
-    parser.add_argument("--jsonl_path", type=str, default="train_processed.jsonl", help="Path to processed Train JSONL")
-    
-    # Validation Data params
-    parser.add_argument("--val_bucket", type=str, default=None, help="S3 Bucket for Validation (default: same as train)")
-    parser.add_argument("--val_prefix", type=str, default=None, help="S3 Prefix for Validation (default: same as train)")
-    parser.add_argument("--val_jsonl", type=str, default=None, help="Path to Validation JSONL")
-    parser.add_argument("--val_batch_size", type=int, default=32, help="Validation batch size")
-    
-    parser.add_argument("--cache_dir", type=str, default="./s3_cache", help="Local cache directory")
-    
-    # Sampler params
-    parser.add_argument("--p", type=int, default=8, help="Number of classes per batch")
-    parser.add_argument("--k", type=int, default=4, help="Number of samples per class")
-    
-    # Model params
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-VL-2B-Instruct", help="Model name")
-    parser.add_argument("--embedding_dim", type=int, default=1536, help="Backbone output dimension")
-    parser.add_argument("--projection_hidden_dim", type=int, default=1024, help="Projection head hidden dimension")
-    parser.add_argument("--projection_output_dim", type=int, default=128, help="Final embedding dimension")
-    parser.add_argument("--freeze_vision", action="store_true", help="Freeze vision encoder")
-    
-    # Training params
-    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--image_size", type=int, default=224, help="Image input size")
-    parser.add_argument("--num_workers", type=int, default=0, help="DataLoader workers")
-    parser.add_argument("--margin", type=float, default=0.2, help="Triplet loss margin")
-    parser.add_argument("--miner_type", type=str, default="semihard", choices=["all", "hard", "semihard", "easy"], help="Miner type")
-    
-    # Output params
-    parser.add_argument("--output_dir", type=str, default="./checkpoints", help="Output directory")
-    parser.add_argument("--save_interval", type=int, default=5, help="Checkpoint save interval")
-    
-    args = parser.parse_args()
+    print(f"Training Configuration:")
+    print(f"  - Bucket: {args.bucket_name}")
+    print(f"  - Train Prefix: {args.prefix}")
+    print(f"  - Output Dir: {args.output_dir}")
+    print(f"  - Epochs: {args.epochs}")
     
     os.makedirs(args.output_dir, exist_ok=True)
     

@@ -86,11 +86,19 @@ class S3Dataset(Dataset):
                 self.data.append(item)
                 
                 # Extract label
+                label = "Unknown"
+                
+                # 1. Try 'image_metadata' -> 'fashion_style' (Validation & Standard)
                 if 'image_metadata' in item and 'fashion_style' in item['image_metadata']:
                     style = item['image_metadata']['fashion_style']
-                    self.labels.append(style)
-                else:
-                    self.labels.append("Unknown")
+                    if style: # Ensure it's not empty string
+                        label = style
+                
+                # 2. Try parsing from Qwen conversation (if label is hidden in text)
+                # Currently, the provided train sample doesn't show explicit style label.
+                # Assuming 'Unknown' for now if not found.
+                
+                self.labels.append(label)
                     
         if limit:
             self.data = self.data[:limit]
@@ -121,9 +129,31 @@ class S3Dataset(Dataset):
         label = self.encoded_labels[idx]
         
         # Construct S3 key
-        filename = item.get('filename')
+        filename = None
+        
+        # 1. Try 'filename' (Standard)
+        if 'filename' in item:
+            filename = item['filename']
+            
+        # 2. Try 'image_filename' (Validation format)
+        elif 'image_filename' in item:
+            filename = item['image_filename']
+            
+        # 3. Try 'conversations' (Qwen Train format)
+        elif 'conversations' in item:
+            # Extract from <img>tag</img>
+            # Example: "Picture 1: <img>images/aug_00000.jpg</img>..."
+            for turn in item['conversations']:
+                if '<img>' in turn['value']:
+                    import re
+                    match = re.search(r'<img>(.*?)</img>', turn['value'])
+                    if match:
+                        full_path = match.group(1) # e.g., images/aug_00000.jpg
+                        filename = os.path.basename(full_path) # aug_00000.jpg
+                        break
+        
         if not filename:
-             raise ValueError(f"Item at index {idx} is missing 'filename' field")
+             raise ValueError(f"Could not extract filename from item at index {idx}: {item.keys()}")
              
         key = os.path.join(self.prefix, filename).replace("\\", "/")
         

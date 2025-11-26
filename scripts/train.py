@@ -351,7 +351,7 @@ class Config:
     embedding_dim: int = 1536
     projection_hidden_dim: int = 1024
     projection_output_dim: int = 128
-    freeze_vision: bool = False
+    freeze_vision: bool = True
     
     # 5. Training params
     epochs: int = 10

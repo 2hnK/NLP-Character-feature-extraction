@@ -208,7 +208,8 @@ def train(args):
     
     train_loader = DataLoader(
         train_dataset, 
-        batch_sampler=train_sampler,
+        batch_size=batch_size,
+        sampler=train_sampler,
         num_workers=args.num_workers,
         pin_memory=True if device == "cuda" else False
     )

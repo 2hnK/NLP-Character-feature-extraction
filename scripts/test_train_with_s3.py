@@ -57,7 +57,7 @@ def test_s3_training_loop():
 
         dataset = S3Dataset(
             bucket_name=bucket_name,
-            jsonl_path="train_aug_final.jsonl",
+            jsonl_path="train_aug_relabeled.jsonl",
             prefix=prefix,
             transform=None, # Qwen processor handles raw images usually, but let's see. 
                             # Actually Qwen3VLFeatureExtractor.forward expects PIL images or list of them.

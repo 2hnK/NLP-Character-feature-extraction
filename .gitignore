@@ -36,7 +36,7 @@ s3_cache/
 checkpoints/
 training.log
 archive/
-*.jsonl
+# *.jsonl
 
 # OS
 .DS_Store

@@ -223,6 +223,13 @@ def train(args):
         device=device
     )
     
+    # Explicitly freeze the entire backbone if requested
+    # (Qwen3VLFeatureExtractor only freezes vision tower by default)
+    if args.freeze_vision:
+        for param in backbone.parameters():
+            param.requires_grad = False
+        logger.info("Backbone (Vision + LLM) frozen.")
+    
     projection_head = ProjectionHead(
         input_dim=args.embedding_dim,
         hidden_dim=args.projection_hidden_dim,
@@ -343,23 +350,23 @@ class Config:
     cache_dir: str = "./s3_cache"
     
     # 3. Sampler params (Batch Size = p * k)
-    p: int = 8  # 클래스(스타일) 개수
-    k: int = 4  # 클래스당 샘플 개수
+    p: int = 6  # 클래스(스타일) 개수 (최대 6개)
+    k: int = 8  # 클래스당 샘플 개수 (Batch Size = 48)
     
     # 4. Model params
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
     embedding_dim: int = 1536
     projection_hidden_dim: int = 1024
-    projection_output_dim: int = 128
+    projection_output_dim: int = 256
     freeze_vision: bool = True
     
     # 5. Training params
-    epochs: int = 10
+    epochs: int = 50
     learning_rate: float = 1e-4
     image_size: int = 224
     num_workers: int = 0
-    margin: float = 0.2
-    miner_type: str = "semihard"  # choices=["all", "hard", "semihard", "easy"]
+    margin: float = 0.3
+    miner_type: str = "hard"  # choices=["all", "hard", "semihard", "easy"]
     
     # 6. Output params
     output_dir: str = "./checkpoints"

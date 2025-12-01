@@ -108,7 +108,7 @@ class S3Dataset(Dataset):
         
         # Encode labels
         if self.label_mapping:
-            self.encoded_labels = [self.label_mapping.get(label, -1) for label in self.labels]
+            self.encoded_labels = np.array([self.label_mapping.get(label, -1) for label in self.labels])
             self.classes = list(self.label_mapping.keys())
         else:
             self.label_encoder = LabelEncoder()

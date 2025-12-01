@@ -45,16 +45,6 @@
 
 ## 🛠 데이터 처리 및 학습 스크립트
 
-### `preprocess_jsonl.py`
-**역할**: 원본 JSONL 메타데이터를 학습에 맞게 전처리합니다.
-- 파일명(`filename`) 필드 추가.
-- 텍스트 입력(`text_input`) 포맷팅 (Style, Features, Vibe 결합).
-- 스타일 라벨을 정수 인덱스로 변환하는 매핑 파일(`label_mapping.json`) 생성.
-- **사용법**:
-  ```bash
-  python scripts/preprocess_jsonl.py --input <input.jsonl> --output <output.jsonl> --mapping_output <mapping.json>
-  ```
-
 ### `train.py`
 **역할**: Triplet Loss를 이용한 메인 학습 스크립트입니다.
 - **기능**:

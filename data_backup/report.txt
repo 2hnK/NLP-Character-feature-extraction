@@ -1,0 +1,39 @@
+🔍 전체 메타데이터(Style, Vibe, Shot) 통계 분석 시작...
+
+📂 Train File: train_aug_restored.jsonl
+📂 Valid File: train_valid_fixed.jsonl
+
+==================== [ FASHION_STYLE ] 분석 결과 ====================
+Class Name                     | Train    | Valid    | Status
+----------------------------------------------------------------------
+Casual_Basic                   | 927      | 36       | 
+Chic_Modern                    | 43       | 21       | 
+Dandy_Minimal                  | 143      | 8        | 
+Feminine_Romantic              | 242      | 0        | 
+Sporty_Athleisure              | 93       | 7        | 
+Street_Hip                     | 69       | 25       | 
+----------------------------------------------------------------------
+Total Count: 1517 (Train) / 97 (Valid)
+💾 [fashion_style] 매핑 파일 저장됨: label_mapping.json
+
+==================== [ VIBE_CATEGORY ] 분석 결과 ====================
+Class Name                     | Train    | Valid    | Status
+----------------------------------------------------------------------
+Artistic_Unique                | 16       | 5        | 
+Cool_Charismatic               | 138      | 5        | 
+Energetic_Active               | 45       | 36       | 
+Professional_Smart             | 28       | 23       | 
+Pure_Natural                   | 158      | 0        | 
+Warm_Friendly                  | 1132     | 28       | 
+----------------------------------------------------------------------
+Total Count: 1517 (Train) / 97 (Valid)
+
+==================== [ SHOT_TYPE ] 분석 결과 ====================
+Class Name                     | Train    | Valid    | Status
+----------------------------------------------------------------------
+FullBody_Shot                  | 85       | 1        | 
+Mirrored_Selfie                | 264      | 49       | 
+Portrait_OtherTaken            | 634      | 47       | 
+Selfie_CloseUp                 | 534      | 0        | 
+----------------------------------------------------------------------
+Total Count: 1517 (Train) / 97 (Valid)

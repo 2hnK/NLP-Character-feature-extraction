@@ -1,14 +1,8 @@
 {
-    "Business_Casual": 0,
-    "Casual_Basic": 1,
-    "Chic_Modern": 2,
-    "Cool_Charismatic": 3,
-    "Dandy_Minimal": 4,
-    "Elegant_Chic": 5,
-    "Feminine_Romantic": 6,
-    "Sporty_Active": 7,
-    "Sporty_Athleisure": 8,
-    "Street_Casual": 9,
-    "Traditional_Korean": 10,
-    "Trendy_Fashion": 11
+    "Casual_Basic": 0,
+    "Chic_Modern": 1,
+    "Dandy_Minimal": 2,
+    "Feminine_Romantic": 3,
+    "Sporty_Athleisure": 4,
+    "Street_Hip": 5
 }

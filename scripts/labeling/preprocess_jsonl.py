@@ -3,6 +3,18 @@ import argparse
 import os
 from pathlib import Path
 
+"""
+JSONL 전처리 및 텍스트 프롬프트 생성 스크립트
+
+이 스크립트는 초기 JSONL 파일을 처리하여 다음을 수행합니다:
+1. 각 항목에 순차적인 파일명(`aug_XXXXX.jpg`) 할당.
+2. 메타데이터를 기반으로 Qwen 모델 입력을 위한 구조화된 텍스트(`text_input`) 생성.
+3. 라벨 매핑 파일 생성.
+
+사용법:
+    python preprocess_jsonl.py --input <input_file> --output <output_file>
+"""
+
 def preprocess_jsonl(input_path, output_path, mapping_output_path, start_index=0):
     """
     Reads a JSONL file, adds a 'filename' field to each entry sequentially,

@@ -4,6 +4,19 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset
 
+"""
+Triplet Loss 구성 요소 단위 테스트 스크립트
+
+이 스크립트는 Triplet Loss 학습에 필요한 핵심 컴포넌트들의 동작을 검증합니다.
+테스트 항목:
+1. PKSampler: 클래스 균형 배치 샘플링(P classes * K samples) 동작 확인.
+2. ProjectionHead: 임베딩 차원 축소 및 L2 정규화 확인.
+3. OnlineTripletLoss: Triplet Loss 계산 및 유효한 Triplet 생성 여부 확인.
+
+사용법:
+    python test_triplet_components.py
+"""
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))

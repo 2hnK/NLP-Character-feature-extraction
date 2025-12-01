@@ -67,7 +67,7 @@ def validate(model, projection_head, val_loader, criterion, device, epoch, outpu
             else:
                 batch_images, batch_labels = batch
                 
-            batch_images = batch_images.to(device)
+            # # batch_images = batch_images.to(device)
             batch_labels = batch_labels.to(device)
             
             # Forward
@@ -160,10 +160,7 @@ def train(args):
     # 2. 데이터셋 준비
     logger.info("Initializing Training Dataset...")
     
-    transform = transforms.Compose([
-        transforms.Resize((args.image_size, args.image_size)),
-        transforms.ToTensor(),
-    ])
+    transform = None  # Qwen processor handles resizing and normalization
     
     # Train Dataset
     train_dataset = S3Dataset(
@@ -188,12 +185,19 @@ def train(args):
         )
         logger.info(f"Validation Dataset size: {len(val_dataset)}")
         
+        def collate_fn(batch):
+            images = [item[0] for item in batch]
+            # item[1] is text_input (ignored for now)
+            labels = torch.stack([item[2] for item in batch])
+            return images, labels
+
         # Validation DataLoader (No PKSampler, Shuffle=False)
         val_loader = DataLoader(
             val_dataset,
             batch_size=args.val_batch_size,
             shuffle=False,
-            num_workers=args.num_workers
+            num_workers=args.num_workers,
+            collate_fn=collate_fn
         )
     else:
         val_dataset = None
@@ -206,11 +210,18 @@ def train(args):
     
     train_sampler = PKSampler(train_dataset, p=args.p, k=args.k)
     
+    def collate_fn(batch):
+        images = [item[0] for item in batch]
+        # item[1] is text_input (ignored for now)
+        labels = torch.stack([item[2] for item in batch])
+        return images, labels
+
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size,
         sampler=train_sampler,
         num_workers=args.num_workers,
+        collate_fn=collate_fn,
         pin_memory=True if device == "cuda" else False
     )
     
@@ -265,7 +276,7 @@ def train(args):
             else:
                 batch_images, batch_labels = batch
                 
-            batch_images = batch_images.to(device)
+            # # batch_images = batch_images.to(device)
             batch_labels = batch_labels.to(device)
             
             optimizer.zero_grad()
@@ -339,18 +350,18 @@ class Config:
     # 1. Train Data params
     bucket_name: str = "sometimes-ki-datasets"
     prefix: str = "dataset/qwen-vl-train-v1/images/"
-    jsonl_path: str = "train_aug_final.jsonl"
+    jsonl_path: str = "train_aug_relabeled.jsonl"
     
     # 2. Validation Data params
     val_bucket: Optional[str] = None  # None이면 bucket_name과 동일하게 사용
     val_prefix: Optional[str] = "dataset/validation/images/"  # 검증 이미지 경로
-    val_jsonl: Optional[str] = "train_valid_final.jsonl"   # 검증 메타데이터 경로
+    val_jsonl: Optional[str] = "validation_relabeled.jsonl"   # 검증 메타데이터 경로
     val_batch_size: int = 32
     
     cache_dir: str = "./s3_cache"
     
     # 3. Sampler params (Batch Size = p * k)
-    p: int = 6  # 클래스(스타일) 개수 (최대 6개)
+    p: int = 5  # 클래스(스타일) 개수 (최대 5개)
     k: int = 8  # 클래스당 샘플 개수 (Batch Size = 48)
     
     # 4. Model params

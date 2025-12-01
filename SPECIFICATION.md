@@ -16,15 +16,24 @@
 - **도구: GPT-5.1** (Vision-Language Model)
 - **방식:** 원본 프로필 이미지를 입력하여 구조화된 JSON 메타데이터를 자동 추출.
 - **스키마 구조 (Hybrid Schema):**
-    - **명목형 (Categorical - 학습 기준):** `fashion_style` (8 Class), `vibe_category` (7 Class), `visual_quality` (3 Class).
-    - **서술형 (Descriptive - 임베딩 보강):** `physical_features` (List), `caption` (Text).
+    - **명목형 (Categorical - 학습 기준):** `fashion_style` (5 Class), `shot_type` (3 Class), `visual_quality` (3 Class).
+    - **서술형 (Descriptive - 임베딩 보강):** `physical_features` (헤어, 액세서리 등 외형 특징), `caption` (텍스트-이미지 매칭용 자연어 설명).
 
 ### 3.2. 클래스 정의 (Class Definition)
 
-Triplet Loss 학습을 위한 Positive/Negative 기준이 되는 핵심 스타일 클래스 8종 정의.
+Triplet Loss 학습을 위한 Positive/Negative 기준이 되는 핵심 스타일 클래스 5종 정의.
 
-- `Dandy_Minimal`, `Casual_Basic`, `Street_Hip`, `Sporty_Athleisure`
-- `Business_Formal`, `Feminine_Romantic`, `Chic_Modern`, `Vintage_Retro`
+- **Fashion Style (5 Classes)**
+    - `Casual_Basic`: 편안함, 티셔츠, 청바지, 후드.
+    - `Street_Hip`: 오버핏, 레이어드, 스트릿 무드.
+    - `Sporty_Athleisure`: 운동복, 레깅스, 저지.
+    - `Chic_Modern`: 블랙, 가죽, 시크함, 도시적.
+    - `Classy_Elegant`: 셔츠, 슬랙스, 수트, 블라우스, 원피스 (깔끔/격식).
+
+- **Shot Type (3 Classes)**
+    - `Selfie_CloseUp`: 얼굴 위주 셀카.
+    - `Mirrored_Selfie`: 거울 셀카 (전신/반신).
+    - `Others_Cam`: 남이 찍어준 사진 (전신/반신/스냅).
 
 ### 3.3. 전처리 (Preprocessing)
 

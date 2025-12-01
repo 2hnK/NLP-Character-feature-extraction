@@ -350,12 +350,12 @@ class Config:
     # 1. Train Data params
     bucket_name: str = "sometimes-ki-datasets"
     prefix: str = "dataset/qwen-vl-train-v1/images/"
-    jsonl_path: str = "train_aug_relabeled.jsonl"
+    jsonl_path: str = "dataset/qwen-vl-train-v1/train_aug_relabeled.jsonl"
     
     # 2. Validation Data params
     val_bucket: Optional[str] = None  # None이면 bucket_name과 동일하게 사용
     val_prefix: Optional[str] = "dataset/validation/images/"  # 검증 이미지 경로
-    val_jsonl: Optional[str] = "validation_relabeled.jsonl"   # 검증 메타데이터 경로
+    val_jsonl: Optional[str] = "dataset/validation/validation_relabeled.jsonl"   # 검증 메타데이터 경로
     val_batch_size: int = 32
     
     cache_dir: str = "./s3_cache"

@@ -13,7 +13,7 @@
 
 ### 3.1. 데이터 수집 및 라벨링 (AI-Assisted Labeling)
 
-- **도구: GPT-5.1** (Vision-Language Model)
+- **도구: Gemini-2.5-flash** (Vision-Language Model)
 - **방식:** 원본 프로필 이미지를 입력하여 구조화된 JSON 메타데이터를 자동 추출.
 - **스키마 구조 (Hybrid Schema):**
     - **명목형 (Categorical - 학습 기준):** `fashion_style` (5 Class), `shot_type` (3 Class), `visual_quality` (3 Class).

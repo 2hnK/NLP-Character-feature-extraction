@@ -23,6 +23,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pytorch_metric_learning.utils.accuracy_calculator import AccuracyCalculator
 from sklearn.manifold import TSNE
+from torch.utils.tensorboard import SummaryWriter
+import wandb
+from PIL import Image
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -45,7 +48,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def validate(model, projection_head, val_loader, criterion, device, epoch, output_dir, classes):
+class ResizeLongestEdge:
+    """
+    Resizes the longest edge of the image to 'max_size' while maintaining aspect ratio.
+    """
+    def __init__(self, max_size: int, interpolation=Image.BICUBIC):
+        self.max_size = max_size
+        self.interpolation = interpolation
+
+    def __call__(self, img: Image.Image) -> Image.Image:
+        w, h = img.size
+        scale = self.max_size / max(w, h)
+        if scale >= 1:
+            return img
+        
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        return img.resize((new_w, new_h), self.interpolation)
+
+    def __repr__(self):
+        return f"ResizeLongestEdge(max_size={self.max_size}, interpolation={self.interpolation})"
+
+def validate(model, projection_head, val_loader, criterion, device, epoch, output_dir, classes, writer=None, use_wandb=False):
     """
     검증 함수: Loss 계산, Recall@K 측정, t-SNE 시각화
     """
@@ -105,7 +129,22 @@ def validate(model, projection_head, val_loader, criterion, device, epoch, outpu
     logger.info(f"Validation Results - Epoch {epoch+1}:")
     logger.info(f"  Avg Loss: {avg_val_loss:.4f}")
     logger.info(f"  Recall@1: {r_at_1:.4f}")
+
     logger.info(f"  MAP@R: {map_at_r:.4f}")
+    
+    # Log Validation Metrics
+    if writer:
+        writer.add_scalar("Val/Loss", avg_val_loss, epoch)
+        writer.add_scalar("Val/Recall_at_1", r_at_1, epoch)
+        writer.add_scalar("Val/MAP_at_R", map_at_r, epoch)
+        
+    if use_wandb:
+        wandb.log({
+            "val/loss": avg_val_loss,
+            "val/recall_at_1": r_at_1,
+            "val/map_at_r": map_at_r,
+            "epoch": epoch
+        })
     
     # 2. t-SNE Visualization (Every 5 epochs or first epoch)
     if (epoch + 1) % 5 == 0 or epoch == 0:
@@ -147,6 +186,18 @@ def validate(model, projection_head, val_loader, criterion, device, epoch, outpu
             plt.close()
             logger.info(f"t-SNE plot saved to {tsne_path}")
             
+            # Log t-SNE image
+            if writer:
+                # Convert plot to image for TensorBoard
+                # Re-open the saved image to log it (simplest way without buffer manipulation)
+                import PIL.Image
+                image = PIL.Image.open(tsne_path)
+                image = transforms.ToTensor()(image)
+                writer.add_image("Val/t-SNE", image, epoch)
+                
+            if use_wandb:
+                wandb.log({"val/t-sne": wandb.Image(tsne_path, caption=f"Epoch {epoch+1}")})
+            
         except Exception as e:
             logger.error(f"Failed to generate t-SNE: {e}")
 
@@ -156,11 +207,27 @@ def train(args):
     # 1. 디바이스 설정
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
+    if device == "cuda":
+        logger.info(f"  - GPU Name: {torch.cuda.get_device_name(0)}")
+        logger.info(f"  - CUDA Version: {torch.version.cuda}")
+        
+        # Set precision
+        if args.use_bfloat16 and torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+            logger.info("  - Using bfloat16 precision")
+        else:
+            dtype = torch.float16
+            logger.info("  - Using float16 precision")
+    else:
+        dtype = torch.float32
+        logger.info("  - Using float32 precision (CPU)")
 
     # 2. 데이터셋 준비
     logger.info("Initializing Training Dataset...")
     
-    transform = None  # Qwen processor handles resizing and normalization
+    # Resize Logic
+    transform = ResizeLongestEdge(max_size=args.image_size)
+    logger.info(f"Using Transform: {transform}")
     
     # Train Dataset
     train_dataset = S3Dataset(
@@ -257,6 +324,19 @@ def train(args):
     # Triplet Loss
     criterion = OnlineTripletLoss(margin=args.margin, type_of_triplets=args.miner_type)
     
+
+    
+    # --- Monitoring Setup ---
+    writer = SummaryWriter(log_dir=os.path.join(args.output_dir, "runs"))
+    
+    if args.use_wandb:
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            config=args.__dict__,
+            name=f"{args.model_name.split('/')[-1]}_e{args.epochs}_b{batch_size}"
+        )
+    
     logger.info("Starting training loop...")
     
     best_recall = 0.0
@@ -281,12 +361,11 @@ def train(args):
             
             optimizer.zero_grad()
             
-            # Forward
-            features = backbone.forward(batch_images)
-            embeddings = projection_head(features)
-            
-            # Loss Calculation
-            loss, num_triplets = criterion(embeddings, batch_labels)
+            # Forward & Loss Calculation with Autocast
+            with torch.cuda.amp.autocast(dtype=dtype, enabled=(device=="cuda")):
+                features = backbone.forward(batch_images)
+                embeddings = projection_head(features)
+                loss, num_triplets = criterion(embeddings, batch_labels)
             
             # Backward
             loss.backward()
@@ -296,6 +375,18 @@ def train(args):
             total_triplets += num_triplets
             
             pbar.set_postfix({'loss': loss.item(), 'triplets': num_triplets})
+            
+            # Log Train Metrics (Step-wise)
+            global_step = epoch * len(train_loader) + pbar.n
+            writer.add_scalar("Train/Loss", loss.item(), global_step)
+            writer.add_scalar("Train/Triplets", num_triplets, global_step)
+            
+            if args.use_wandb:
+                wandb.log({
+                    "train/loss": loss.item(),
+                    "train/triplets": num_triplets,
+                    "global_step": global_step
+                })
             
         avg_train_loss = train_loss / len(train_loader)
         avg_triplets = total_triplets / len(train_loader)
@@ -312,7 +403,10 @@ def train(args):
                 device, 
                 epoch, 
                 args.output_dir,
-                train_dataset.classes
+
+                train_dataset.classes,
+                writer=writer,
+                use_wandb=args.use_wandb
             )
             
             # Save Best Model based on Recall@1
@@ -341,6 +435,9 @@ def train(args):
             logger.info(f"Checkpoint saved to {save_path}")
 
     logger.info("Training complete!")
+    writer.close()
+    if args.use_wandb:
+        wandb.finish()
 
 # ==========================================
 # 설정 (Configuration)
@@ -374,14 +471,21 @@ class Config:
     # 5. Training params
     epochs: int = 50
     learning_rate: float = 1e-4
-    image_size: int = 224
-    num_workers: int = 0
+    image_size: int = 1024  # Max dimension for ResizeLongestEdge
+    num_workers: int = 4
     margin: float = 0.3
-    miner_type: str = "hard"  # choices=["all", "hard", "semihard", "easy"]
+    miner_type: str = "semihard"  # choices=["all", "hard", "semihard", "easy"]
+    use_bfloat16: bool = True
     
     # 6. Output params
     output_dir: str = "./checkpoints"
+
     save_interval: int = 5
+    
+    # 7. Monitoring params
+    use_wandb: bool = False
+    wandb_project: str = "fashion-style-triplet"
+    wandb_entity: Optional[str] = None
 
 def main():
     # 설정값 인스턴스 생성

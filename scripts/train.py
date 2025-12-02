@@ -518,7 +518,7 @@ class Config:
     wandb_entity: Optional[str] = None
     
     # 8. Resume params
-    resume_from_checkpoint: Optional[str] = None  # Path to checkpoint to resume from
+    resume_from_checkpoint: Optional[str] = "./checkpoints/latest_checkpoint.pth"
 
 def main():
     # 설정값 인스턴스 생성

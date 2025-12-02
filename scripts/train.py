@@ -471,7 +471,7 @@ class Config:
     freeze_vision: bool = True
     
     # 5. Training params
-    epochs: int = 50
+    epochs: int = 30
     learning_rate: float = 1e-4
     image_size: int = 768  # Reduced from 1024 to save memory
     num_workers: int = 4

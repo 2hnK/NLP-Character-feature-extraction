@@ -300,6 +300,7 @@ def train(args):
         model_name=args.model_name,
         embedding_dim=args.embedding_dim,
         freeze_vision_encoder=args.freeze_vision,
+        use_projection_head=False,
         device=device
     )
     
@@ -334,7 +335,8 @@ def train(args):
         
         # Load state dicts
         # Handle case where backbone might be wrapped or have different keys
-        backbone.load_state_dict(checkpoint['backbone_state_dict'])
+        # strict=False allows loading checkpoints that might have extra keys (e.g. internal projection_head)
+        backbone.load_state_dict(checkpoint['backbone_state_dict'], strict=False)
         projection_head.load_state_dict(checkpoint['projection_head_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         

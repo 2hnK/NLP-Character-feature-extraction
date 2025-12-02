@@ -12,6 +12,7 @@ Qwen3-VL 모델 학습 스크립트 (Triplet Loss 적용)
 import sys
 import os
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -121,7 +122,6 @@ def validate(model, projection_head, val_loader, criterion, device, epoch, outpu
     metrics = calculator.get_accuracy(
         all_embeddings, 
         all_labels,
-        embeddings_and_labels_are_gpu=False
     )
     
     r_at_1 = metrics["precision_at_1"]
@@ -325,6 +325,22 @@ def train(args):
     # Triplet Loss
     criterion = OnlineTripletLoss(margin=args.margin, type_of_triplets=args.miner_type)
     
+    # Resume from checkpoint if specified
+    start_epoch = 0
+    if args.resume_from_checkpoint and os.path.exists(args.resume_from_checkpoint):
+        logger.info(f"Resuming from checkpoint: {args.resume_from_checkpoint}")
+        checkpoint = torch.load(args.resume_from_checkpoint, map_location=device)
+        
+        # Load state dicts
+        # Handle case where backbone might be wrapped or have different keys
+        backbone.load_state_dict(checkpoint['backbone_state_dict'])
+        projection_head.load_state_dict(checkpoint['projection_head_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        start_epoch = checkpoint['epoch'] + 1
+        logger.info(f"Resumed from epoch {start_epoch}")
+    
+    
 
     
     # --- Monitoring Setup ---
@@ -342,7 +358,7 @@ def train(args):
     
     best_recall = 0.0
     
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         # --- Training ---
         backbone.train() if not args.freeze_vision else backbone.eval()
         projection_head.train()
@@ -488,6 +504,9 @@ class Config:
     use_wandb: bool = False
     wandb_project: str = "fashion-style-triplet"
     wandb_entity: Optional[str] = None
+    
+    # 8. Resume params
+    resume_from_checkpoint: Optional[str] = None  # Path to checkpoint to resume from
 
 def main():
     # 설정값 인스턴스 생성

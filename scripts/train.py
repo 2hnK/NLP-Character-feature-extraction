@@ -11,6 +11,7 @@ Qwen3-VL 모델 학습 스크립트 (Triplet Loss 적용)
 
 import sys
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -363,7 +364,8 @@ def train(args):
             
             # Forward & Loss Calculation with Autocast
             with torch.cuda.amp.autocast(dtype=dtype, enabled=(device=="cuda")):
-                features = backbone.forward(batch_images)
+                with torch.no_grad():
+                    features = backbone.forward(batch_images)
                 embeddings = projection_head(features)
                 loss, num_triplets = criterion(embeddings, batch_labels)
             
@@ -459,7 +461,7 @@ class Config:
     
     # 3. Sampler params (Batch Size = p * k)
     p: int = 5  # 클래스(스타일) 개수 (최대 5개)
-    k: int = 8  # 클래스당 샘플 개수 (Batch Size = 48)
+    k: int = 4  # 클래스당 샘플 개수 (Batch Size = 20)
     
     # 4. Model params
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"

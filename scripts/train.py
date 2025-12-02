@@ -11,7 +11,7 @@ Qwen3-VL 모델 학습 스크립트 (Triplet Loss 적용)
 
 import sys
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import logging
 from dataclasses import dataclass
 from typing import Optional

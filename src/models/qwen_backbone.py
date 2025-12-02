@@ -40,7 +40,7 @@ class Qwen3VLFeatureExtractor(nn.Module):
             model_name,
             torch_dtype=torch.float16,
             device_map="auto",
-        ).to(self.device)
+        )
 
         # Load processor
         self.processor = AutoProcessor.from_pretrained(model_name)

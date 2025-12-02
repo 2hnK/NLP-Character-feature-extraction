@@ -118,7 +118,8 @@ def validate(model, projection_head, val_loader, criterion, device, epoch, outpu
     all_labels = torch.cat(all_labels)
     
     # 1. Calculate Recall@K using AccuracyCalculator
-    calculator = AccuracyCalculator(include=("precision_at_1", "mean_average_precision_at_r"), k=5)
+    # k="max_bin_count"로 설정하여 MAP@R 계산 시 모든 관련 샘플을 고려하도록 함 (Warning 해결)
+    calculator = AccuracyCalculator(include=("precision_at_1", "mean_average_precision_at_r"), k="max_bin_count")
     metrics = calculator.get_accuracy(
         all_embeddings, 
         all_labels,

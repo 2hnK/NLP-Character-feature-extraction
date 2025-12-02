@@ -115,6 +115,13 @@ class S3Dataset(Dataset):
             self.encoded_labels = self.label_encoder.fit_transform(self.labels)
             self.classes = self.label_encoder.classes_
             
+            # Save the generated mapping
+            self.label_mapping = {label: int(idx) for idx, label in enumerate(self.classes)}
+            mapping_path = "label_mapping.json"
+            print(f"Saving generated label mapping to {mapping_path}")
+            with open(mapping_path, 'w', encoding='utf-8') as f:
+                json.dump(self.label_mapping, f, indent=4, ensure_ascii=False)
+            
         self.num_classes = len(self.classes)
         print(f"Found {self.num_classes} classes.")
         

@@ -363,7 +363,7 @@ def train(args):
             optimizer.zero_grad()
             
             # Forward & Loss Calculation with Autocast
-            with torch.cuda.amp.autocast(dtype=dtype, enabled=(device=="cuda")):
+            with torch.amp.autocast('cuda', dtype=dtype, enabled=(device=="cuda")):
                 with torch.no_grad():
                     features = backbone.forward(batch_images)
                 embeddings = projection_head(features)

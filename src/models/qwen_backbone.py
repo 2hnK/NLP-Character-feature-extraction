@@ -4,7 +4,7 @@ Qwen3-VL Vision-Language Model Integration for Profile Feature Extraction
 
 import torch
 import torch.nn as nn
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
 
@@ -36,7 +36,7 @@ class Qwen3VLFeatureExtractor(nn.Module):
 
         print(f"Loading Qwen3-VL model: {model_name}")
 
-        self.model = AutoModelForVision2Seq.from_pretrained(
+        self.model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             torch_dtype=torch.float16,
             device_map="auto",

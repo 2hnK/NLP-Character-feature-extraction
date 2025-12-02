@@ -473,7 +473,7 @@ class Config:
     # 5. Training params
     epochs: int = 50
     learning_rate: float = 1e-4
-    image_size: int = 1024  # Max dimension for ResizeLongestEdge
+    image_size: int = 768  # Reduced from 1024 to save memory
     num_workers: int = 4
     margin: float = 0.3
     miner_type: str = "semihard"  # choices=["all", "hard", "semihard", "easy"]

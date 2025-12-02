@@ -38,7 +38,7 @@ class Qwen3VLFeatureExtractor(nn.Module):
 
         self.model = AutoModelForImageTextToText.from_pretrained(
             model_name,
-            torch_dtype=torch.float16,
+            dtype=torch.float16,
             device_map="auto",
         )
 

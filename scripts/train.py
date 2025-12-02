@@ -411,6 +411,17 @@ def train(args):
         
         logger.info(f"Epoch {epoch+1} Train Summary: Loss = {avg_train_loss:.4f}, Avg Triplets = {avg_triplets:.1f}")
         
+        # --- Safety Checkpoint (Save BEFORE Validation) ---
+        latest_save_path = os.path.join(args.output_dir, "latest_checkpoint.pth")
+        torch.save({
+            'epoch': epoch,
+            'backbone_state_dict': backbone.state_dict(),
+            'projection_head_state_dict': projection_head.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_train_loss,
+        }, latest_save_path)
+        logger.info(f"Safety checkpoint saved to {latest_save_path}")
+        
         # --- Validation ---
         if val_loader:
             val_loss, recall_1 = validate(

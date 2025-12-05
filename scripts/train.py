@@ -495,14 +495,14 @@ class Config:
     
     # 4. Model params
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
-    embedding_dim: int = 1536
+    embedding_dim: int = 2048  # Qwen3-VL-2B 실제 출력 차원
     projection_hidden_dim: int = 1024
     projection_output_dim: int = 256
     freeze_vision: bool = True
     
     # 5. Training params
-    epochs: int = 30
-    learning_rate: float = 1e-4
+    epochs: int = 15  # Fine-tuning: 10 + 5
+    learning_rate: float = 5e-5  # Fine-tuning: LR 절반으로 감소
     image_size: int = 768  # Reduced from 1024 to save memory
     num_workers: int = 4
     margin: float = 0.3
@@ -510,7 +510,7 @@ class Config:
     use_bfloat16: bool = True
     
     # 6. Output params
-    output_dir: str = "./checkpoints"
+    output_dir: str = "./checkpoints_finetuned"  # 기존 체크포인트 보존
 
     save_interval: int = 5
     
@@ -520,7 +520,7 @@ class Config:
     wandb_entity: Optional[str] = None
     
     # 8. Resume params
-    resume_from_checkpoint: Optional[str] = "./checkpoints/latest_checkpoint.pth"
+    resume_from_checkpoint: Optional[str] = "./checkpoints/checkpoint_epoch_10.pth"  # Epoch 10에서 재개
 
 def main():
     # 설정값 인스턴스 생성

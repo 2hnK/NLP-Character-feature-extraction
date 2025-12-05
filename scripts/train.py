@@ -495,13 +495,13 @@ class Config:
     
     # 4. Model params
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
-    embedding_dim: int = 1536
+    embedding_dim: int = 2048  # Qwen3-VL-2B 실제 출력 차원
     projection_hidden_dim: int = 1024
     projection_output_dim: int = 256
     freeze_vision: bool = True
     
     # 5. Training params
-    epochs: int = 30
+    epochs: int = 10  # 학습 시간 단축
     learning_rate: float = 1e-4
     image_size: int = 768  # Reduced from 1024 to save memory
     num_workers: int = 4
@@ -520,7 +520,7 @@ class Config:
     wandb_entity: Optional[str] = None
     
     # 8. Resume params
-    resume_from_checkpoint: Optional[str] = "./checkpoints/latest_checkpoint.pth"
+    resume_from_checkpoint: Optional[str] = None  # 처음부터 재학습
 
 def main():
     # 설정값 인스턴스 생성

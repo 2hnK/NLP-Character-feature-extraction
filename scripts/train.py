@@ -363,70 +363,79 @@ def train(args):
     
     for epoch in range(start_epoch, args.epochs):
         # --- Training ---
-        backbone.train() if not args.freeze_vision else backbone.eval()
-        projection_head.train()
-        
-        train_loss = 0.0
-        total_triplets = 0
-        
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs} [Train]")
-        for batch in pbar:
-            if len(batch) == 3:
-                batch_images, _, batch_labels = batch
-            else:
-                batch_images, batch_labels = batch
+        # validation_only 모드: 학습 건너뛰고 검증만 실행
+        if args.validation_only:
+            logger.info(f"[validation_only=True] Skipping training for epoch {epoch+1}")
+        else:
+            backbone.train() if not args.freeze_vision else backbone.eval()
+            projection_head.train()
+            
+            train_loss = 0.0
+            total_triplets = 0
+            
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs} [Train]")
+            for batch in pbar:
+                if len(batch) == 3:
+                    batch_images, _, batch_labels = batch
+                else:
+                    batch_images, batch_labels = batch
+                    
+                # # batch_images = batch_images.to(device)
+                batch_labels = batch_labels.to(device)
                 
-            # # batch_images = batch_images.to(device)
-            batch_labels = batch_labels.to(device)
+                optimizer.zero_grad()
+                
+                # Forward & Loss Calculation with Autocast
+                with torch.amp.autocast('cuda', dtype=dtype, enabled=(device=="cuda")):
+                    with torch.no_grad():
+                        features = backbone.forward(batch_images)
+                    embeddings = projection_head(features)
+                    loss, num_triplets = criterion(embeddings, batch_labels)
+                
+                # Backward
+                loss.backward()
+                optimizer.step()
+                
+                train_loss += loss.item()
+                total_triplets += num_triplets
+                
+                pbar.set_postfix({'loss': loss.item(), 'triplets': num_triplets})
+                
+                # Log Train Metrics (Step-wise)
+                global_step = epoch * len(train_loader) + pbar.n
+                writer.add_scalar("Train/Loss", loss.item(), global_step)
+                writer.add_scalar("Train/Triplets", num_triplets, global_step)
+                
+                if args.use_wandb:
+                    wandb.log({
+                        "train/loss": loss.item(),
+                        "train/triplets": num_triplets,
+                        "global_step": global_step
+                    })
+                
+            avg_train_loss = train_loss / len(train_loader)
+            avg_triplets = total_triplets / len(train_loader)
             
-            optimizer.zero_grad()
+            logger.info(f"Epoch {epoch+1} Train Summary: Loss = {avg_train_loss:.4f}, Avg Triplets = {avg_triplets:.1f}")
             
-            # Forward & Loss Calculation with Autocast
-            with torch.amp.autocast('cuda', dtype=dtype, enabled=(device=="cuda")):
-                with torch.no_grad():
-                    features = backbone.forward(batch_images)
-                embeddings = projection_head(features)
-                loss, num_triplets = criterion(embeddings, batch_labels)
-            
-            # Backward
-            loss.backward()
-            optimizer.step()
-            
-            train_loss += loss.item()
-            total_triplets += num_triplets
-            
-            pbar.set_postfix({'loss': loss.item(), 'triplets': num_triplets})
-            
-            # Log Train Metrics (Step-wise)
-            global_step = epoch * len(train_loader) + pbar.n
-            writer.add_scalar("Train/Loss", loss.item(), global_step)
-            writer.add_scalar("Train/Triplets", num_triplets, global_step)
-            
-            if args.use_wandb:
-                wandb.log({
-                    "train/loss": loss.item(),
-                    "train/triplets": num_triplets,
-                    "global_step": global_step
-                })
-            
-        avg_train_loss = train_loss / len(train_loader)
-        avg_triplets = total_triplets / len(train_loader)
-        
-        logger.info(f"Epoch {epoch+1} Train Summary: Loss = {avg_train_loss:.4f}, Avg Triplets = {avg_triplets:.1f}")
-        
-        # --- Safety Checkpoint (Save BEFORE Validation) ---
-        latest_save_path = os.path.join(args.output_dir, "latest_checkpoint.pth")
-        torch.save({
-            'epoch': epoch,
-            'backbone_state_dict': backbone.state_dict(),
-            'projection_head_state_dict': projection_head.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': avg_train_loss,
-        }, latest_save_path)
-        logger.info(f"Safety checkpoint saved to {latest_save_path}")
+            # --- Safety Checkpoint (Save BEFORE Validation) ---
+            latest_save_path = os.path.join(args.output_dir, "latest_checkpoint.pth")
+            torch.save({
+                'epoch': epoch,
+                'backbone_state_dict': backbone.state_dict(),
+                'projection_head_state_dict': projection_head.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_train_loss,
+            }, latest_save_path)
+            logger.info(f"Safety checkpoint saved to {latest_save_path}")
         
         # --- Validation ---
         if val_loader:
+            # OOM 방지: 검증 전 GPU 메모리 정리
+            if device == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
             val_loss, recall_1 = validate(
                 backbone, 
                 projection_head, 
@@ -435,7 +444,6 @@ def train(args):
                 device, 
                 epoch, 
                 args.output_dir,
-
                 train_dataset.classes,
                 writer=writer,
                 use_wandb=args.use_wandb
@@ -454,8 +462,8 @@ def train(args):
                 }, save_path)
                 logger.info(f"New Best Model Saved! (Recall@1: {best_recall:.4f})")
 
-        # Regular Checkpoint
-        if (epoch + 1) % args.save_interval == 0:
+        # Regular Checkpoint (학습을 수행했을 때만)
+        if not args.validation_only and (epoch + 1) % args.save_interval == 0:
             save_path = os.path.join(args.output_dir, f"checkpoint_epoch_{epoch+1}.pth")
             torch.save({
                 'epoch': epoch,
@@ -465,6 +473,12 @@ def train(args):
                 'loss': avg_train_loss,
             }, save_path)
             logger.info(f"Checkpoint saved to {save_path}")
+        
+        # validation_only 모드: 검증 1회 후 종료
+        if args.validation_only:
+            logger.info("validation_only mode: Exiting after 1 validation run.")
+            logger.info("다음 실행 시 validation_only=False로 설정하고 다음 에폭부터 학습을 계속하세요.")
+            break
 
     logger.info("Training complete!")
     writer.close()
@@ -521,6 +535,7 @@ class Config:
     
     # 8. Resume params
     resume_from_checkpoint: Optional[str] = "./checkpoints/checkpoint_epoch_10.pth"  # Epoch 10에서 재개
+    validation_only: bool = False  # True면 학습 건너뛰고 검증만 실행 (OOM 후 검증 재시도용)
 
 def main():
     # 설정값 인스턴스 생성

@@ -282,7 +282,7 @@ def visualize_tsne(
     
     # t-SNE 계산
     perplexity = min(30, len(embeddings) - 1)
-    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity, n_iter=1000)
+    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity, max_iter=1000)
     embeddings_2d = tsne.fit_transform(embeddings)
     
     # 색상 팔레트 (5개 클래스용)

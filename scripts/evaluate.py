@@ -49,7 +49,8 @@ class EvalConfig:
     """평가 설정"""
     # 체크포인트 경로 (JupyterLab 환경)
     # best_model.pth = Epoch 3 기준 (R@1: 87.76%, MAP@R: 0.7852)
-    checkpoint_path: str = "scripts/checkpoints/best_model.pth"
+    # checkpoint_epoch_10.pth = Epoch 10 체크포인트
+    checkpoint_path: str = "scripts/checkpoints/checkpoint_epoch_10.pth"
     
     # 테스트 데이터 (JupyterLab 경로)
     test_jsonl: str = "vaildation/validation_labeled.jsonl"
@@ -365,20 +366,71 @@ def main():
         json.dump(metrics, f, indent=2, ensure_ascii=False)
     logger.info(f"Metrics saved to: {metrics_path}")
     
-    # 7. 결과 출력
+    # 7. Markdown 표 생성 (논문용)
+    checkpoint_name = Path(config.checkpoint_path).stem
+    md_path = output_dir / f"results_{checkpoint_name}.md"
+    
+    md_content = f"""# Evaluation Results: {checkpoint_name}
+
+## 📊 Overall Metrics
+
+| Metric | Value |
+|--------|-------|
+| **Total Samples** | {len(embeddings)} |
+| **Recall@1** | {metrics.get('recall_at_1', 'N/A'):.4f} |
+| **R-Precision** | {metrics.get('r_precision', 'N/A'):.4f} |
+| **MAP@R** | {metrics.get('map_at_r', 'N/A'):.4f} |
+| **Silhouette Score** | {metrics.get('silhouette_score', 'N/A'):.4f} |
+
+## 📈 Class Distribution
+
+| Class | Count | Ratio |
+|-------|-------|-------|
+"""
+    total_count = sum(metrics.get('class_distribution', {}).values())
+    for cls, count in metrics.get('class_distribution', {}).items():
+        ratio = count / total_count * 100 if total_count > 0 else 0
+        md_content += f"| {cls} | {count} | {ratio:.1f}% |\n"
+    
+    md_content += f"""
+## 📁 Generated Files
+
+- `tsne_visualization.png`: t-SNE 시각화
+- `metrics.json`: 전체 메트릭 (JSON)
+- `results_{checkpoint_name}.md`: 이 파일
+"""
+    
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(md_content)
+    logger.info(f"Markdown report saved to: {md_path}")
+    
+    # 8. CSV 저장 (에폭별 비교용)
+    csv_path = output_dir / "comparison.csv"
+    csv_exists = csv_path.exists()
+    
+    with open(csv_path, 'a', encoding='utf-8') as f:
+        if not csv_exists:
+            f.write("Checkpoint,Samples,Recall@1,R-Precision,MAP@R,Silhouette\n")
+        f.write(f"{checkpoint_name},{len(embeddings)},{metrics.get('recall_at_1', ''):.4f},{metrics.get('r_precision', ''):.4f},{metrics.get('map_at_r', ''):.4f},{metrics.get('silhouette_score', ''):.4f}\n")
+    logger.info(f"Results appended to: {csv_path}")
+    
+    # 9. 결과 출력
     print("\n" + "="*60)
     print("📊 Evaluation Results")
     print("="*60)
+    print(f"Checkpoint: {checkpoint_name}")
     print(f"Total samples: {len(embeddings)}")
-    print(f"Recall@1: {metrics.get('recall_at_1', 'N/A')}")
-    print(f"R-Precision: {metrics.get('r_precision', 'N/A')}")
-    print(f"MAP@R: {metrics.get('map_at_r', 'N/A')}")
-    print(f"Silhouette Score: {metrics.get('silhouette_score', 'N/A')}")
+    print(f"Recall@1: {metrics.get('recall_at_1', 'N/A'):.4f}")
+    print(f"R-Precision: {metrics.get('r_precision', 'N/A'):.4f}")
+    print(f"MAP@R: {metrics.get('map_at_r', 'N/A'):.4f}")
+    print(f"Silhouette Score: {metrics.get('silhouette_score', 'N/A'):.4f}")
     print("\nClass Distribution:")
     for cls, count in metrics.get('class_distribution', {}).items():
         print(f"  - {cls}: {count}")
     print("="*60)
     print(f"\n✅ Results saved to: {output_dir}")
+    print(f"   - Markdown: {md_path.name}")
+    print(f"   - CSV (comparison): {csv_path.name}")
 
 
 if __name__ == "__main__":

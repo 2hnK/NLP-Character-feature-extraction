@@ -99,14 +99,18 @@ class ResizeLongestEdge:
 
 def load_test_data(config: EvalConfig) -> List[Dict]:
     """테스트 데이터 로드"""
+    # 프로젝트 루트 기준 절대 경로로 변환
+    test_jsonl_path = project_root / config.test_jsonl
+    test_image_dir = project_root / config.test_image_dir
+    
     data = []
-    with open(config.test_jsonl, 'r', encoding='utf-8') as f:
+    with open(test_jsonl_path, 'r', encoding='utf-8') as f:
         for line in f:
             item = json.loads(line)
             
             # 이미지 경로 구성
             filename = item.get('filename')
-            image_path = Path(config.test_image_dir) / filename
+            image_path = test_image_dir / filename
             
             # 라벨 추출
             fashion_style = item.get('image_metadata', {}).get('fashion_style')
@@ -151,11 +155,12 @@ def load_model(config: EvalConfig, device: str):
     ).to(device)
     
     # 체크포인트 로드
-    if not os.path.exists(config.checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found: {config.checkpoint_path}")
+    checkpoint_path = project_root / config.checkpoint_path
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
-    logger.info(f"Loading checkpoint: {config.checkpoint_path}")
-    checkpoint = torch.load(config.checkpoint_path, map_location=device)
+    logger.info(f"Loading checkpoint: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     
     # State dict 로드
     backbone.load_state_dict(checkpoint['backbone_state_dict'], strict=False)
@@ -325,8 +330,9 @@ def visualize_tsne(
 def main():
     config = EvalConfig()
     
-    # 출력 디렉토리 생성
-    os.makedirs(config.output_dir, exist_ok=True)
+    # 출력 디렉토리 생성 (프로젝트 루트 기준)
+    output_dir = project_root / config.output_dir
+    os.makedirs(output_dir, exist_ok=True)
     
     # 디바이스 설정
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -350,11 +356,11 @@ def main():
     metrics = compute_metrics(embeddings, labels)
     
     # 5. t-SNE 시각화
-    tsne_path = os.path.join(config.output_dir, "tsne_visualization.png")
-    visualize_tsne(embeddings, labels, styles, tsne_path, metrics)
+    tsne_path = output_dir / "tsne_visualization.png"
+    visualize_tsne(embeddings, labels, styles, str(tsne_path), metrics)
     
     # 6. 결과 저장
-    metrics_path = os.path.join(config.output_dir, "metrics.json")
+    metrics_path = output_dir / "metrics.json"
     with open(metrics_path, 'w', encoding='utf-8') as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
     logger.info(f"Metrics saved to: {metrics_path}")
@@ -372,7 +378,7 @@ def main():
     for cls, count in metrics.get('class_distribution', {}).items():
         print(f"  - {cls}: {count}")
     print("="*60)
-    print(f"\n✅ Results saved to: {config.output_dir}")
+    print(f"\n✅ Results saved to: {output_dir}")
 
 
 if __name__ == "__main__":

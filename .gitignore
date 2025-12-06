@@ -33,10 +33,10 @@ env/
 
 # Project Specific
 s3_cache/
-# checkpoints/
-# training.log
+checkpoints/
+training.log
 archive/
-# *.jsonl
+*.jsonl
 
 # OS
 .DS_Store

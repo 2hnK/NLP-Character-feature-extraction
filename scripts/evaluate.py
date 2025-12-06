@@ -47,12 +47,19 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EvalConfig:
     """평가 설정"""
-    # 체크포인트 경로 (JupyterLab 환경)
-    # best_model.pth = Epoch 3 기준 (R@1: 87.76%, MAP@R: 0.7852)
-    # checkpoint_epoch_10.pth = Epoch 10 체크포인트
+    # 체크포인트 경로
     checkpoint_path: str = "scripts/checkpoints/checkpoint_epoch_10.pth"
     
-    # 테스트 데이터 (JupyterLab 경로)
+    # === S3 데이터 사용 설정 (훈련 검증 데이터) ===
+    use_s3: bool = True  # True: S3 검증 데이터 사용, False: 로컬 테스트 이미지 사용
+    
+    # S3 설정 (훈련과 동일)
+    bucket_name: str = "sometimes-ki-datasets"
+    s3_jsonl: str = "dataset/validation/validation_relabeled.jsonl"
+    s3_prefix: str = "dataset/validation/images/"
+    cache_dir: str = "./s3_cache"
+    
+    # 로컬 테스트 데이터 (use_s3=False일 때 사용)
     test_jsonl: str = "vaildation/validation_labeled.jsonl"
     test_image_dir: str = "vaildation/images_renamed"
     
@@ -99,7 +106,77 @@ class ResizeLongestEdge:
 
 
 def load_test_data(config: EvalConfig) -> List[Dict]:
-    """테스트 데이터 로드"""
+    """테스트 데이터 로드 (S3 또는 로컬)"""
+    
+    if config.use_s3:
+        # S3 검증 데이터 사용 (훈련 시 사용한 것과 동일)
+        logger.info("Loading validation data from S3...")
+        return load_s3_data(config)
+    else:
+        # 로컬 테스트 데이터 사용
+        logger.info("Loading test data from local files...")
+        return load_local_data(config)
+
+
+def load_s3_data(config: EvalConfig) -> List[Dict]:
+    """S3에서 검증 데이터 로드"""
+    import boto3
+    import io
+    
+    s3_client = boto3.client('s3')
+    
+    # JSONL 다운로드 (로컬에 없으면)
+    local_jsonl = os.path.join(config.cache_dir, os.path.basename(config.s3_jsonl))
+    os.makedirs(config.cache_dir, exist_ok=True)
+    
+    if not os.path.exists(local_jsonl):
+        logger.info(f"Downloading {config.s3_jsonl} from S3...")
+        s3_client.download_file(config.bucket_name, config.s3_jsonl, local_jsonl)
+    
+    data = []
+    with open(local_jsonl, 'r', encoding='utf-8') as f:
+        for line in f:
+            item = json.loads(line)
+            
+            # 파일명 추출
+            filename = item.get('filename') or item.get('image_filename')
+            if not filename:
+                continue
+            
+            # 라벨 추출
+            fashion_style = item.get('image_metadata', {}).get('fashion_style')
+            
+            if fashion_style not in LABEL_MAPPING:
+                logger.warning(f"Unknown fashion_style: {fashion_style}, skipping {filename}")
+                continue
+            
+            # S3 키 구성
+            s3_key = os.path.join(config.s3_prefix, filename).replace("\\", "/")
+            
+            # 로컬 캐시 경로
+            local_path = os.path.join(config.cache_dir, filename)
+            
+            # 이미지 다운로드 (캐시에 없으면)
+            if not os.path.exists(local_path):
+                try:
+                    s3_client.download_file(config.bucket_name, s3_key, local_path)
+                except Exception as e:
+                    logger.warning(f"Failed to download {s3_key}: {e}")
+                    continue
+            
+            data.append({
+                'id': item.get('id'),
+                'image_path': local_path,
+                'label': LABEL_MAPPING[fashion_style],
+                'fashion_style': fashion_style
+            })
+    
+    logger.info(f"Loaded {len(data)} samples from S3")
+    return data
+
+
+def load_local_data(config: EvalConfig) -> List[Dict]:
+    """로컬 테스트 데이터 로드"""
     # 프로젝트 루트 기준 절대 경로로 변환
     test_jsonl_path = project_root / config.test_jsonl
     test_image_dir = project_root / config.test_image_dir

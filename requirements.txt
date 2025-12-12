@@ -3,8 +3,8 @@ torch>=2.0.0
 torchvision>=0.15.0
 pytorch-metric-learning>=2.3.0
 
-# Protocol Buffers (for TensorFlow/SageMaker compatibility)
-protobuf>=4.21.0,<5.0
+# Protocol Buffers (TensorFlow 2.18+ requires protobuf 5.26+)
+protobuf>=5.26.0
 
 # Computer Vision
 opencv-python>=4.8.0
@@ -41,11 +41,9 @@ transformers>=4.57.0  # Required for Qwen3-VL
 qwen-vl-utils>=0.0.8
 accelerate>=0.24.0
 sentencepiece>=0.1.99
-ml-dtypes>=0.4.0,<0.5.0  # Required for TensorFlow compatibility
 
 # Google Generative AI (for Gemini API labeling)
 google-generativeai>=0.3.0
-grpcio-status<1.71  # Compatibility with protobuf<5.0
 
 # AWS SDK
 sagemaker>=2.200.0

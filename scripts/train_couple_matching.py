@@ -100,17 +100,39 @@ class ResizeLongestEdge:
 
 
 class CoupleDataset(Dataset):
-    """커플 데이터셋"""
+    """커플 데이터셋 (손상된 이미지 자동 필터링)"""
     def __init__(self, couple_ids: List[int], data_dir: str, image_size: int = 768):
-        self.couple_ids = couple_ids
         self.data_dir = Path(data_dir)
         self.transform = ResizeLongestEdge(max_size=image_size)
         
+        # 유효한 커플만 필터링
+        self.valid_couples = []
+        skipped = []
+        for cid in couple_ids:
+            couple_dir = self.data_dir / f"couple_{cid}"
+            female_path = couple_dir / "female.png"
+            male_path = couple_dir / "male.png"
+            
+            # 파일 존재 및 열기 가능 확인
+            try:
+                if female_path.exists() and male_path.exists():
+                    Image.open(female_path).verify()
+                    Image.open(male_path).verify()
+                    self.valid_couples.append(cid)
+                else:
+                    skipped.append(cid)
+            except Exception:
+                skipped.append(cid)
+        
+        if skipped:
+            logger.warning(f"Skipped {len(skipped)} corrupted couples: {skipped[:10]}...")
+        logger.info(f"Valid couples: {len(self.valid_couples)}/{len(couple_ids)}")
+        
     def __len__(self):
-        return len(self.couple_ids)
+        return len(self.valid_couples)
     
     def __getitem__(self, idx):
-        couple_id = self.couple_ids[idx]
+        couple_id = self.valid_couples[idx]
         couple_dir = self.data_dir / f"couple_{couple_id}"
         
         # 이미지 로드
@@ -382,7 +404,7 @@ def main():
         weight_decay=config.weight_decay
     )
     scheduler = CosineAnnealingLR(optimizer, T_max=config.epochs)
-    scaler = GradScaler(enabled=config.use_amp)
+    scaler = GradScaler('cuda', enabled=config.use_amp)
     
     # 체크포인트 디렉토리
     os.makedirs(config.checkpoint_dir, exist_ok=True)

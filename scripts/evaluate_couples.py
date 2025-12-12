@@ -108,7 +108,7 @@ def load_model(checkpoint_path: str, config: CoupleEvalConfig, device: str):
     
     # 체크포인트 로드
     logger.info(f"Loading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     # State dict 로드
     backbone.load_state_dict(checkpoint['backbone_state_dict'], strict=False)

@@ -49,8 +49,9 @@ class CoupleEvalConfig:
     # 로컬 경로 (SageMaker JupyterLab)
     couple_data_dir: str = os.path.expanduser("~/data/mutual-like-validations/images")
     checkpoint_path: str = os.path.expanduser("~/checkpoints/best_model_epoch3.pth")
+    splits_file: str = "couple_splits.json"  # 분할 파일 경로
     
-    # 커플 범위 (couple_1~4는 누락됨)
+    # 커플 범위 (splits 미사용 시)
     start_couple: int = 5
     end_couple: int = 778
     
@@ -390,10 +391,14 @@ def main():
                         help="Couple data directory")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Checkpoint path")
+    parser.add_argument("--splits-file", type=str, default=None,
+                        help="Splits JSON file (from prepare_couple_splits.py)")
+    parser.add_argument("--split", type=str, default=None, choices=['test', 'all'],
+                        help="Which split to evaluate: 'test' or 'all'")
     parser.add_argument("--start", type=int, default=5, 
-                        help="Start couple number")
+                        help="Start couple number (ignored if --splits-file used)")
     parser.add_argument("--end", type=int, default=778, 
-                        help="End couple number")
+                        help="End couple number (ignored if --splits-file used)")
     args = parser.parse_args()
     
     config = CoupleEvalConfig()
@@ -403,6 +408,20 @@ def main():
         config.couple_data_dir = args.data_dir
     if args.checkpoint:
         config.checkpoint_path = args.checkpoint
+    if args.splits_file:
+        config.splits_file = args.splits_file
+    
+    # 커플 ID 결정
+    couple_ids_to_eval = None
+    if args.split and os.path.exists(config.splits_file):
+        with open(config.splits_file, 'r') as f:
+            splits = json.load(f)
+        if args.split == 'test':
+            couple_ids_to_eval = splits['test']
+            logger.info(f"Evaluating TEST set: {len(couple_ids_to_eval)} couples")
+        elif args.split == 'all':
+            couple_ids_to_eval = None  # 전체 평가
+    
     config.start_couple = args.start
     config.end_couple = args.end
     

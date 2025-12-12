@@ -35,7 +35,7 @@ env/
 s3_cache/
 checkpoints/
 training.log
-archive/
+# archive/
 *.jsonl
 
 # OS

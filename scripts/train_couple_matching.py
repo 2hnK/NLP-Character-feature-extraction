@@ -54,8 +54,8 @@ class TrainConfig:
     splits_file: str = "couple_splits.json"
     
     # 체크포인트
-    checkpoint_dir: str = "./couple_checkpoints"
-    pretrained_checkpoint: Optional[str] = os.path.expanduser("~/checkpoints/best_model_epoch3.pth")
+    checkpoint_dir: str = "./couple_matching_checkpoints"
+    pretrained_checkpoint: Optional[str] = None  # 새 모델에서 시작
     
     # 모델 설정
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
@@ -326,12 +326,21 @@ def main():
     parser.add_argument("--batch-size", type=int, default=48, help="Batch size")
     parser.add_argument("--epochs", type=int, default=30, help="Number of epochs")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Pretrained checkpoint to load (optional)")
     args = parser.parse_args()
     
     config = TrainConfig()
     config.batch_size = args.batch_size
     config.epochs = args.epochs
     config.learning_rate = args.lr
+    
+    # 체크포인트 옵션
+    if args.checkpoint:
+        config.pretrained_checkpoint = args.checkpoint
+        logger.info(f"📥 Loading checkpoint: {args.checkpoint}")
+    else:
+        logger.info("🆕 Training from scratch (no pretrained weights)")
     
     # 디바이스
     device = "cuda" if torch.cuda.is_available() else "cpu"

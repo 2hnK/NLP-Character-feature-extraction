@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import numpy as np
 from PIL import Image
@@ -64,7 +64,7 @@ class TrainConfig:
     projection_output_dim: int = 256
     
     # 학습 하이퍼파라미터
-    batch_size: int = 48  # 안전한 시작값
+    batch_size: int = 48  # InfoNCE에 유리한 큰 배치
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
     epochs: int = 30
@@ -249,7 +249,7 @@ def train_one_epoch(
         
         optimizer.zero_grad()
         
-        with autocast(enabled=config.use_amp):
+        with autocast('cuda', enabled=config.use_amp):
             # Forward pass
             with torch.no_grad():
                 female_features = backbone.forward(female_imgs)
@@ -297,7 +297,7 @@ def validate(backbone, projection_head, dataloader, criterion, device, config):
         female_imgs = batch['female_imgs']
         male_imgs = batch['male_imgs']
         
-        with autocast(enabled=config.use_amp):
+        with autocast('cuda', enabled=config.use_amp):
             female_features = backbone.forward(female_imgs)
             male_features = backbone.forward(male_imgs)
             

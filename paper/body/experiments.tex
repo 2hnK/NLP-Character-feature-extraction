@@ -1,0 +1,30 @@
+\subsection{실험 환경}
+
+실험에서는 실제 데이팅 앱 환경을 모사한 프로필 이미지 데이터셋을 구축하고, Gemini-2.5-flash 기반 라벨러를 이용해 각 이미지에 대해 패션 스타일, 사진 분위기, 화질 정보를 자동 주석하였다. 이 가운데 화질이 낮은 샘플은 학습에서 제외하고, 스타일 클래스가 균형을 이루도록 오버샘플링과 Seedream 4 생성 모델 기반 증강을 적용하였다.
+
+데이터셋은 학습/검증 세트로 분할되며(1,508/98), 학습 시에는 Qwen3-VL-2B 시각 인코더를 동결하고 프로젝션 헤드만 업데이트한다. 옵티마이저는 AdamW(학습률 1e-4)를 사용하며, 배치 크기는 $P=5$, $K=4$로 설정하였다. Margin $\alpha=0.3$, 임베딩 차원 $d=256$으로 설정하였으며, 검증 세트의 Recall@1을 기준으로 최적 체크포인트를 선정하였다.
+
+\subsection{평가 결과}
+
+정량 평가는 검증 이미지 하나를 쿼리로 사용하여, 임베딩 공간에서 다른 사용자들에 대한 최근접 이웃 검색을 수행하는 방식으로 진행한다. 표 \ref{tab:results}는 검증 세트에서 측정된 성능 지표를 보여준다.
+
+\begin{table}[h]
+\centering
+\caption{검증 세트 성능 지표}
+\label{tab:results}
+\begin{tabular}{|c|c|}
+\hline
+\textbf{지표} & \textbf{값} \\
+\hline
+Recall@1 & 87.76\% \\
+\hline
+MAP@R & 78.52\% \\
+\hline
+Silhouette Score & 0.34 \\
+\hline
+\end{tabular}
+\end{table}
+
+Recall@1은 쿼리와 동일 스타일을 가진 샘플이 최근접 이웃으로 검색될 확률을 나타내며, MAP@R은 관련 샘플들의 평균 정밀도를 측정한다. Silhouette Score가 양수(0.34)로 나타나 임베딩 공간에서 스타일 군집이 잘 형성되었음을 확인하였다.
+
+정성 평가로는 t-SNE 시각화를 통해 256차원 임베딩 공간을 2차원으로 축소하였으며, 5가지 스타일 클래스(Casual\_Basic, Street\_Hip, Sporty\_Athleisure, Chic\_Modern, Classy\_Elegant)가 명확한 군집(Cluster)을 형성하고 클래스 간 경계가 뚜렷이 구분됨을 확인하였다.

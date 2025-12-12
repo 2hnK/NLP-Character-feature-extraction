@@ -1,0 +1,56 @@
+% Template: 한국통신학회 학술대회 논문작성 양식 (latex) - unofficial
+% Main sources
+% - http://ids.snu.ac.kr/wiki/LaTeX_template_for_KCC
+% - https://github.com/leejaymin/Kiise-Latex-template
+% Edited by Jinhong Jung (Soongsil University, DMLAB)
+
+\documentclass[9pt]{kics} % for review
+\renewcommand{\thesection}{\Roman{section}} 
+\renewcommand{\thesubsection}{\thesection.\Roman{subsection}}
+
+\input{packages}
+\usepackage[utf8]{inputenc}
+\usepackage{tabularx}
+
+%\renewcommand{\thefootnote}{\fnsymbol{footnote}}
+
+\title{Metric Learning과 VLM을 활용한 \\
+데이팅 앱 스타일 매칭 시스템
+}
+\author{
+김지훈*, 최은기, 박준형  \\
+국립한밭대학교 \\ \ \\ 
+20227128@edu.hanbat.ac.kr, 20221991@edu.hanbat.ac.kr, 20197119@edu.hanbat.ac.kr
+}
+
+\engtitle{\ \\
+A Style Matching System for Dating Applications \\
+using Metric Learning and Vision-Language Models
+}
+\engauthor{
+Jihun Kim*, Eungi Choi, Junhyeong Park \\
+Hanbat National University \\ \ \\
+}
+
+\abstract{
+    \input{head/00abstract}
+}
+
+\begin{document}
+
+\maketitle
+
+\input{body/introduction}
+\input{body/proposed}
+\input{body/experiments}
+\input{body/conclusion}
+
+\renewcommand{\refname}{}
+\begin{center}
+\vspace{20}
+\textbf{참 고 문 헌}
+\vspace{-15}
+\end{center}
+\bibliographystyle{ieeetr}
+\bibliography{references}
+\end{document}

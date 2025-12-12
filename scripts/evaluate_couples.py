@@ -1,14 +1,15 @@
 """
-커플 데이터 기반 Recall@K 평가 스크립트
+커플 데이터 기반 Recall@K 평가 스크립트 (로컬 버전)
 
-실제 매칭된 커플 데이터(778쌍)를 사용하여:
+실제 매칭된 커플 데이터(774쌍)를 사용하여:
 1. 각 사용자의 임베딩 추출
 2. Female → Male 검색 시 파트너가 Top-K에 있는지 평가
 3. Male → Female 검색 시 파트너가 Top-K에 있는지 평가
 4. Recall@K, MRR, Hit Rate 등 지표 계산
 
-S3 경로: s3://sagemaker-ap-northeast-2-369036988146/data/mutual-like-validations/images/couple_{1-778}/
-체크포인트: s3://sagemaker-ap-northeast-2-369036988146/best_model_epoch3.pth
+SageMaker JupyterLab 로컬 경로:
+- 체크포인트: ~/checkpoints/best_model_epoch3.pth
+- 커플 데이터: ~/data/mutual-like-validations/images/couple_{5-778}/
 """
 
 import os
@@ -19,9 +20,7 @@ import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
-from io import BytesIO
 
-import boto3
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -47,17 +46,12 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 @dataclass
 class CoupleEvalConfig:
     """커플 평가 설정"""
-    # S3 설정
-    bucket_name: str = "sagemaker-ap-northeast-2-369036988146"
-    couple_prefix: str = "data/mutual-like-validations/images/"
-    checkpoint_s3_key: str = "best_model_epoch3.pth"
+    # 로컬 경로 (SageMaker JupyterLab)
+    couple_data_dir: str = os.path.expanduser("~/data/mutual-like-validations/images")
+    checkpoint_path: str = os.path.expanduser("~/checkpoints/best_model_epoch3.pth")
     
-    # 로컬 캐시
-    cache_dir: str = "./couple_cache"
-    checkpoint_local: str = "./couple_cache/best_model_epoch3.pth"
-    
-    # 커플 범위
-    start_couple: int = 1
+    # 커플 범위 (couple_1~4는 누락됨)
+    start_couple: int = 5
     end_couple: int = 778
     
     # 모델 설정 (학습 시와 동일)
@@ -89,24 +83,6 @@ class ResizeLongestEdge:
         new_w = int(w * scale)
         new_h = int(h * scale)
         return img.resize((new_w, new_h), self.interpolation)
-
-
-def download_checkpoint(config: CoupleEvalConfig, s3_client) -> str:
-    """S3에서 체크포인트 다운로드"""
-    os.makedirs(config.cache_dir, exist_ok=True)
-    
-    if not os.path.exists(config.checkpoint_local):
-        logger.info(f"Downloading checkpoint from S3: {config.checkpoint_s3_key}")
-        s3_client.download_file(
-            config.bucket_name, 
-            config.checkpoint_s3_key, 
-            config.checkpoint_local
-        )
-        logger.info(f"Checkpoint saved to: {config.checkpoint_local}")
-    else:
-        logger.info(f"Using cached checkpoint: {config.checkpoint_local}")
-    
-    return config.checkpoint_local
 
 
 def load_model(checkpoint_path: str, config: CoupleEvalConfig, device: str):
@@ -146,32 +122,37 @@ def load_model(checkpoint_path: str, config: CoupleEvalConfig, device: str):
 
 
 def load_couple_images(
-    config: CoupleEvalConfig, 
-    s3_client
+    config: CoupleEvalConfig
 ) -> Tuple[List[Tuple[int, Image.Image, Image.Image]], List[int]]:
-    """S3에서 커플 이미지 로드"""
+    """로컬에서 커플 이미지 로드"""
     transform = ResizeLongestEdge(max_size=config.image_size)
     couples = []
     skipped = []
     
-    logger.info(f"Loading couple images from S3...")
+    data_dir = Path(config.couple_data_dir)
+    logger.info(f"Loading couple images from: {data_dir}")
     
     for couple_num in tqdm(
         range(config.start_couple, config.end_couple + 1), 
         desc="Loading couples"
     ):
         try:
-            female_key = f"{config.couple_prefix}couple_{couple_num}/female.png"
-            male_key = f"{config.couple_prefix}couple_{couple_num}/male.png"
+            couple_dir = data_dir / f"couple_{couple_num}"
+            female_path = couple_dir / "female.png"
+            male_path = couple_dir / "male.png"
+            
+            # 파일 존재 확인
+            if not female_path.exists() or not male_path.exists():
+                logger.warning(f"Skipping couple_{couple_num}: files not found")
+                skipped.append(couple_num)
+                continue
             
             # Female 이미지 로드
-            female_obj = s3_client.get_object(Bucket=config.bucket_name, Key=female_key)
-            female_img = Image.open(BytesIO(female_obj['Body'].read())).convert('RGB')
+            female_img = Image.open(female_path).convert('RGB')
             female_img = transform(female_img)
             
             # Male 이미지 로드
-            male_obj = s3_client.get_object(Bucket=config.bucket_name, Key=male_key)
-            male_img = Image.open(BytesIO(male_obj['Body'].read())).convert('RGB')
+            male_img = Image.open(male_path).convert('RGB')
             male_img = transform(male_img)
             
             couples.append((couple_num, female_img, male_img))
@@ -242,10 +223,8 @@ def compute_couple_metrics(
     n_couples = len(female_embeddings)
     
     # 코사인 유사도 행렬 계산
-    # female_embeddings: [N, D], male_embeddings: [N, D]
-    # similarity_f2m[i, j] = female_i와 male_j의 유사도
-    similarity_f2m = np.dot(female_embeddings, male_embeddings.T)  # [N, N]
-    similarity_m2f = similarity_f2m.T  # [N, N]
+    similarity_f2m = np.dot(female_embeddings, male_embeddings.T)
+    similarity_m2f = similarity_f2m.T
     
     metrics = {
         "n_couples": n_couples,
@@ -255,24 +234,19 @@ def compute_couple_metrics(
     }
     
     # --- Female → Male 방향 ---
-    # 각 female에 대해 파트너 male이 상위 K에 있는지
     ranks_f2m = []
     for i in range(n_couples):
-        scores = similarity_f2m[i]  # female_i와 모든 male의 유사도
-        # 내림차순 정렬된 인덱스
+        scores = similarity_f2m[i]
         sorted_indices = np.argsort(-scores)
-        # 파트너(male_i)의 순위 (0-indexed)
         rank = np.where(sorted_indices == i)[0][0]
         ranks_f2m.append(rank)
     
     ranks_f2m = np.array(ranks_f2m)
     
-    # Recall@K, Hit Rate@K
     for k in k_values:
         hits = np.sum(ranks_f2m < k)
         metrics["female_to_male"][f"recall@{k}"] = hits / n_couples
     
-    # MRR (Mean Reciprocal Rank)
     mrr_f2m = np.mean(1.0 / (ranks_f2m + 1))
     metrics["female_to_male"]["mrr"] = float(mrr_f2m)
     metrics["female_to_male"]["mean_rank"] = float(np.mean(ranks_f2m))
@@ -297,7 +271,7 @@ def compute_couple_metrics(
     metrics["male_to_female"]["mean_rank"] = float(np.mean(ranks_m2f))
     metrics["male_to_female"]["median_rank"] = float(np.median(ranks_m2f))
     
-    # --- 양방향 (둘 다 성공해야 Hit) ---
+    # --- 양방향 ---
     for k in k_values:
         bidirectional_hits = np.sum((ranks_f2m < k) & (ranks_m2f < k))
         metrics["bidirectional"][f"recall@{k}"] = bidirectional_hits / n_couples
@@ -411,48 +385,60 @@ def save_results(metrics: Dict, output_dir: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate model on couple data")
-    parser.add_argument("--start", type=int, default=1, help="Start couple number")
-    parser.add_argument("--end", type=int, default=778, help="End couple number")
-    parser.add_argument("--batch-size", type=int, default=1, help="Batch size")
+    parser = argparse.ArgumentParser(description="Evaluate model on couple data (local)")
+    parser.add_argument("--data-dir", type=str, default=None, 
+                        help="Couple data directory")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Checkpoint path")
+    parser.add_argument("--start", type=int, default=5, 
+                        help="Start couple number")
+    parser.add_argument("--end", type=int, default=778, 
+                        help="End couple number")
     args = parser.parse_args()
     
     config = CoupleEvalConfig()
+    
+    # 명령줄 인자로 덮어쓰기
+    if args.data_dir:
+        config.couple_data_dir = args.data_dir
+    if args.checkpoint:
+        config.checkpoint_path = args.checkpoint
     config.start_couple = args.start
     config.end_couple = args.end
-    config.batch_size = args.batch_size
     
-    # S3 클라이언트
-    s3_client = boto3.client('s3')
+    # 경로 확인
+    if not Path(config.checkpoint_path).exists():
+        logger.error(f"Checkpoint not found: {config.checkpoint_path}")
+        return 1
+    if not Path(config.couple_data_dir).exists():
+        logger.error(f"Data directory not found: {config.couple_data_dir}")
+        return 1
     
     # 디바이스 설정
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
     
-    # 1. 체크포인트 다운로드
-    checkpoint_path = download_checkpoint(config, s3_client)
+    # 1. 모델 로드
+    backbone, projection_head = load_model(config.checkpoint_path, config, device)
     
-    # 2. 모델 로드
-    backbone, projection_head = load_model(checkpoint_path, config, device)
-    
-    # 3. 커플 이미지 로드
-    couples, skipped = load_couple_images(config, s3_client)
+    # 2. 커플 이미지 로드 (로컬)
+    couples, skipped = load_couple_images(config)
     
     if not couples:
         logger.error("No couples loaded. Exiting.")
         return 1
     
-    # 4. 임베딩 추출
+    # 3. 임베딩 추출
     female_embs, male_embs, couple_ids = extract_embeddings(
         backbone, projection_head, couples, device
     )
     
-    # 5. 지표 계산
+    # 4. 지표 계산
     metrics = compute_couple_metrics(female_embs, male_embs, config.k_values)
     metrics["skipped_couples"] = skipped
     metrics["couple_ids"] = couple_ids
     
-    # 6. 결과 출력 및 저장
+    # 5. 결과 출력 및 저장
     print_results(metrics)
     save_results(metrics, config.output_dir)
     

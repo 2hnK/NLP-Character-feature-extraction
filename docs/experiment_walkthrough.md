@@ -112,7 +112,7 @@ InfoNCE Loss 기반 커플 매칭 모델의 기준 성능(Baseline) 확립. CLIP
 | Weight Decay | 1e-4 |
 | Dropout | ❌ (없음) |
 
-<img src="data/default.png" width="717" height="928" alt="실험 1: Baseline 결과">
+<img src="data/default.png" width="600" alt="실험 1: Baseline 결과">
 
 **결과 분석**:
 
@@ -134,7 +134,7 @@ InfoNCE Loss 기반 커플 매칭 모델의 기준 성능(Baseline) 확립. CLIP
 | Projection Head | Dropout(0.3) 추가 |
 | 기타 | 동일 |
 
-<img src="data/dropout.png" width="721" height="924" alt="실험 2: Dropout 적용 결과">
+<img src="data/dropout.png" width="600" alt="실험 2: Dropout 적용 결과">
 
 **결과 분석**:
 
@@ -156,7 +156,7 @@ Dropout 대신 InfoNCE Loss의 Temperature 파라미터를 조정하여 일반�
 | Temperature | 0.07 (sharp) | 0.1 (smoother) |
 | Dropout | ❌ | ❌ (제거) |
 
-<img src="data/temperature.png" width="722" height="922" alt="실험 3: Temperature 조정 결과">
+<img src="data/temperature.png" width="600" alt="실험 3: Temperature 조정 결과">
 
 **결과 분석**:
 
@@ -179,7 +179,7 @@ Dropout 대신 InfoNCE Loss의 Temperature 파라미터를 조정하여 일반�
 | Temperature | 0.07 | 0.1 | 분포 완화로 학습 안정화 |
 | Patience | 5 | 10 | 개선 추세 시 더 기다림 |
 
-<img src="data/temperature_v2.png" width="722" height="920" alt="실험 4: 하이퍼파라미터 튜닝 결과">
+<img src="data/temperature_v2.png" width="600" alt="실험 4: 하이퍼파라미터 튜닝 결과">
 
 **결과 분석**:
 

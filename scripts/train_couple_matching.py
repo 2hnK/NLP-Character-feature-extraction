@@ -65,8 +65,8 @@ class TrainConfig:
     
     # 학습 하이퍼파라미터
     batch_size: int = 48  # InfoNCE에 유리한 큰 배치
-    learning_rate: float = 1e-4
-    weight_decay: float = 1e-4
+    learning_rate: float = 5e-5  # 1e-4 -> 5e-5 (천천히 학습)
+    weight_decay: float = 1e-3   # 1e-4 -> 1e-3 (규제 강화)
     epochs: int = 30
     temperature: float = 0.1  # 0.07(sharp) -> 0.1(smoother) 일반화 실험
     
@@ -74,7 +74,7 @@ class TrainConfig:
     warmup_epochs: int = 2
     
     # Early stopping
-    patience: int = 5
+    patience: int = 10  # 5 -> 10으로 완화 (Loss가 줄어들면 더 기다림)
     
     # 이미지
     image_size: int = 768

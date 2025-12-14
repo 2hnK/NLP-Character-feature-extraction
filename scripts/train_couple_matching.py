@@ -68,7 +68,7 @@ class TrainConfig:
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
     epochs: int = 30
-    temperature: float = 0.07
+    temperature: float = 0.1  # 0.07(sharp) -> 0.1(smoother) 일반화 실험
     
     # 스케줄러
     warmup_epochs: int = 2

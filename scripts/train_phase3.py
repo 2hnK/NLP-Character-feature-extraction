@@ -62,6 +62,9 @@ def evaluate(model, val_loader, criterion, device, threshold=0.5):
     
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validation"):
+            if batch is None:
+                continue
+                
             img_a, text_a, img_b, text_b, labels = batch
             labels = labels.to(device)
             
@@ -73,11 +76,6 @@ def evaluate(model, val_loader, criterion, device, threshold=0.5):
             if emb_a.size(0) != labels.size(0) or emb_b.size(0) != labels.size(0):
                continue
             
-            # Safety Check for Batch Size Mismatch (e.g. if processor dropped an image)
-            if emb_a.size(0) != labels.size(0) or emb_b.size(0) != labels.size(0):
-                print(f"[WARN] Batch size mismatch in evaluation. Labels: {labels.size(0)}, EmbA: {emb_a.size(0)}, EmbB: {emb_b.size(0)}")
-                continue
-
             # Loss (Compute on ALL pairs, both pos and neg)
             loss = criterion(emb_a, emb_b, labels)
             total_loss += loss.item()
@@ -85,6 +83,7 @@ def evaluate(model, val_loader, criterion, device, threshold=0.5):
             # Collect Positive Pairs for Retrieval Evaluation
             # labels: 1 (Pos), -1 (Neg)
             pos_mask = (labels == 1)
+            
             if pos_mask.sum() > 0:
                 pos_emb_a.append(emb_a[pos_mask].cpu())
                 pos_emb_b.append(emb_b[pos_mask].cpu())
@@ -173,8 +172,12 @@ def train(args):
     
     # Collate fn for list of PIL images and strings
     def collate_fn(batch):
-        # batch is list of tuples: (img_a, text_a, img_b, text_b, label)
-        # We need to return List[PIL.Image] for images
+        # batch is list of tuples: (img_a, text_a, img_b, text_b, label) or None
+        # Filter None items
+        batch = [item for item in batch if item is not None]
+        if len(batch) == 0:
+            return None
+            
         imgs_a = [item[0] for item in batch]
         texts_a = [item[1] for item in batch]
         imgs_b = [item[2] for item in batch]

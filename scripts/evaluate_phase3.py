@@ -47,6 +47,9 @@ def evaluate(model, val_loader, device):
     logger.info("Extracting embeddings...")
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Evaluation"):
+            if batch is None:
+                continue
+                
             img_a, text_a, img_b, text_b, labels = batch
             labels = labels.to(device)
             
@@ -59,7 +62,9 @@ def evaluate(model, val_loader, device):
                continue
 
             # Collect Positive Pairs
+            # labels: 1 (Pos), -1 (Neg)
             pos_mask = (labels == 1)
+            
             if pos_mask.sum() > 0:
                 pos_emb_a.append(emb_a[pos_mask].cpu())
                 pos_emb_b.append(emb_b[pos_mask].cpu())
@@ -130,8 +135,14 @@ def main(args):
         seed=args.seed
     )
     
+    # Collate fn for list of PIL images and strings
     def collate_fn(batch):
-        # Return list of PIL images
+        # batch is list of tuples: (img_a, text_a, img_b, text_b, label) or None
+        # Filter None items
+        batch = [item for item in batch if item is not None]
+        if len(batch) == 0:
+            return None
+            
         imgs_a = [item[0] for item in batch]
         texts_a = [item[1] for item in batch]
         imgs_b = [item[2] for item in batch]
@@ -143,11 +154,15 @@ def main(args):
     
     # 2. Model
     logger.info(f"Loading Model: {args.model_name}")
+    # Use bfloat16 for evaluation as well to match training
     model = Qwen3VLWithTextFeatureExtractor(
         model_name=args.model_name,
         embedding_dim=args.embedding_dim,
         device=device
     )
+    # Manually cast to bfloat16 if needed, or rely on internal loading
+    # The class init uses float16 or bfloat16 based on code.
+    # Note: we should update evaluate script to match training script changes (bfloat16)
     
     # Load Checkpoint
     checkpoint_path = args.checkpoint_path

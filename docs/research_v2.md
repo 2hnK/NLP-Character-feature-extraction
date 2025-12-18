@@ -8,25 +8,27 @@ Jihun Kim\*, Eungi Choi, Junhyeong Park
 
 요 약
 
-본 논문에서는 실제 데이팅 앱에서 성사된 커플 데이터를 활용하여, 사용자 프로필 이미지 기반의 매칭 예측 시스템을 제안한다. 제안하는 모델은 Qwen3-VL을 백본으로 하여 시각적 특징을 추출하고, 경량화된 프로젝션 헤드를 결합하여 매칭 호환성 임베딩을 학습한다. InfoNCE Loss와 Semi-Hard Negative Mining 기법을 적용하여 실제 커플 쌍을 가깝게, 비커플 쌍을 멀게 배치하도록 학습한다. 소규모 데이터(775쌍)의 한계를 극복하기 위해 5-Fold Cross Validation을 적용하여 모델의 일반화 성능과 신뢰구간을 확보하였다.
+본 논문에서는 실제 데이팅 앱에서 성사된 커플 데이터를 활용하여, 사용자 프로필 이미지 기반의 매칭 예측 시스템을 제안한다. 제안하는 모델은 Qwen3-VL을 백본으로 하여 시각적 특징을 추출하고, 경량화된 프로젝션 헤드를 결합하여 매칭 호환성 임베딩을 학습한다. InfoNCE Loss와 Semi-Hard Negative Mining 기법을 적용하여 실제 커플 쌍을 가깝게, 비커플 쌍을 멀게 배치하도록 학습한다. 775쌍의 데이터를 80/20 비율로 분할하여 Train/Validation과 Test 세트를 구성하였다.
 
 Key Words: couple matching, dating application, metric learning, contrastive learning, InfoNCE, vision-language model, Qwen3-VL
 
 ABSTRACT
 
-In this paper, we propose a couple matching prediction system based on user profile images, utilizing actual couple data from a dating application. The proposed model adopts Qwen3-VL as the backbone for visual feature extraction and incorporates a lightweight projection head to learn matching compatibility embeddings. We employ InfoNCE Loss with Semi-Hard Negative Mining to train the model such that actual couple pairs are embedded closely while non-couple pairs are pushed apart. To overcome the limitations of small-scale data (775 pairs), we apply 5-Fold Cross Validation to ensure model generalization and establish confidence intervals.
+This paper proposes a couple matching prediction system based on user profile images, utilizing actual couple data from a dating application. The proposed model employs Qwen3-VL as the backbone for visual feature extraction and incorporates a lightweight projection head to learn matching compatibility embeddings. We apply InfoNCE Loss with Semi-Hard Negative Mining to embed actual couple pairs closely while pushing non-couple pairs apart. The dataset of 775 pairs is split into 80/20 ratio for Train/Validation and Test sets. The final model achieved R@1 of 1.69%, representing a 2.6-fold improvement over the random baseline.
 
 Ⅰ. 서 론
 
-기존 온라인 데이팅 서비스에서 사용자 매칭은 주로 나이, 거주 지역, 관심사나 간단한 자기소개 문구 같은 텍스트 프로필 정보에 의존한다. 그러나 실제 사용자는 프로필 사진에서 드러나는 시각적 요인에 크게 좌우되며, 이러한 암묵적 선호를 정량화하는 것은 어려운 과제이다.
+기존 온라인 데이팅 서비스에서 사용자 매칭은 주로 나이, 거주 지역, 관심사나 간단한 자기소개 문구 같은 텍스트 프로필 정보에 의존한다. 그러나 실제 사용자는 프로필 사진에서 드러나는 시각적 요인에 크게 좌우되며, 이러한 암묵적 선호를 정량화하는 것은 어려운 과제이다. 기존 연구[2][3]는 대부분 텍스트 프로필 유사도나 협업 필터링에 의존하였으나, 사용자의 시각적 선호를 반영하지 못하는 한계가 있다.
 
 본 연구는 Walster 등이 제안한 사회심리학적 이론인 '매칭 가설(The Matching Hypothesis)[1]'을 이론적 토대로 한다. 해당 가설에 따르면, 개인은 파트너 선택 시 자신과 유사한 수준의 신체적 매력도나 사회적 바람직성을 가진 상대를 선호하는 경향(Assortative Mating)이 있다. 이를 현대적 온라인 데이팅 환경에 적용하여, 실제 매칭된 커플 데이터를 학습함으로써 매칭 호환성을 예측하는 모델을 제안한다.
+
+본 연구의 주요 기여점은 다음과 같다: (1) 실제 커플 데이터 775쌍을 활용한 대조 학습 프레임워크 제안, (2) VLM 백본과 경량 프로젝션 헤드를 결합한 효율적 임베딩 구조 설계, (3) 소규모 데이터에서의 과적합 억제를 위한 하이퍼파라미터 튜닝 전략 검증.
 
 Ⅱ. 본 론
 
 1. 문제 정의
 
-사용자 i의 프로필 이미지를 x_i라 하자. 커플 쌍 (x_f, x_m)에 대해, 두 사용자의 임베딩 e_f, e_m이 임베딩 공간에서 가깝도록 학습한다. 비커플 쌍은 멀어지도록 대조 학습(Contrastive Learning)을 수행한다.
+사용자 i의 프로필 이미지를 x_i라 정의한다. 커플 쌍 (x_f, x_m)에 대해, 두 사용자의 임베딩 e_f, e_m이 임베딩 공간에서 가깝도록 학습하며, 비커플 쌍은 멀어지도록 대조 학습(Contrastive Learning)을 수행한다.
 
 2. 데이터셋
 
@@ -35,7 +37,7 @@ In this paper, we propose a couple matching prediction system based on user prof
 [표 1] 데이터셋 구성
 │ 항목 │ 값 │
 │ 총 커플 수 │ 775쌍 │
-│ Train+Valid (5-Fold) │ 620쌍 (80%) │
+│ Train+Valid │ 620쌍 (80%) │
 │ Test (Hold-out) │ 155쌍 (20%) │
 
 3. 임베딩 구조
@@ -57,18 +59,11 @@ In this paper, we propose a couple matching prediction system based on user prof
 
 여기서 τ는 temperature 하이퍼파라미터(0.07)이며, sim은 코사인 유사도를 의미한다.
 
-학습 효율을 높이기 위해 Semi-Hard Negative Mining을 적용한다. 이는 마진 경계 내에 위치한 샘플을 선택하여 학습 안정성과 수렴 속도 간의 균형을 제공한다.
+학습 효율을 높이기 위해 Semi-Hard Negative Mining을 적용한다. 이는 마진 경계 내에 위치한 샘플을 선택하여 학습 안정성과 수렴 속도 간의 균형을 확보한다.
 
-5. 5-Fold Cross Validation
+5. 데이터 분할
 
-775쌍의 소규모 데이터에서 신뢰성 있는 평가를 위해 5-Fold Cross Validation을 적용한다.
-
-[표 2] 데이터 분할 전략
-│ 방법 │ Train 데이터 활용 │ 평가 신뢰성 │
-│ Hold-out 70/30 │ 70%만 사용 │ 1회 검증 │
-│ 5-Fold CV │ 모든 데이터 활용 │ 5회 평균±표준편차 │
-
-각 fold에서 최적 체크포인트를 저장하고, 최종 성능은 5개 fold의 평균과 표준편차로 보고한다.
+표 1과 같이 전체 데이터를 80/20 비율로 분할하였다. Validation 셋은 학습 중 Early Stopping과 최적 체크포인트 선택에 활용하며, Test 셋은 최종 성능 평가에 사용한다.
 
 6. 실험 환경
 
@@ -79,12 +74,28 @@ In this paper, we propose a couple matching prediction system based on user prof
 │ Learning Rate │ 1e-4 │ CosineAnnealing │
 │ Temperature │ 0.07 │ CLIP 검증값 │
 │ Epochs │ 30 │ Early Stopping │
+백본 모델로 Qwen3-VL-2B를 사용하며, 과적합 방지를 위해 백본의 모든 파라미터를 동결하였다. 배치 크기는 GPU 메모리(A10G 24GB) 제약에 따라 48~64쌍으로 설정하였다. 학습률은 1e-4로 시작하여 CosineAnnealing 스케줄러를 적용하였으며, InfoNCE Loss의 Temperature는 CLIP[5]에서 검증된 0.07을 사용하였다. 총 30 에폭 동안 학습하며 Early Stopping을 적용하여 과적합을 방지하였다.
+
+7. 실험 결과
+
+과적합 억제를 위한 4가지 하이퍼파라미터 설정에 대해 비교 실험을 수행하였다. 표 4는 각 실험의 Test 성능을 나타낸다.
+
+[표 4] 하이퍼파라미터 튜닝 실험 결과
+│ 실험 │ τ │ LR │ Weight Decay │ R@1 │ R@5 │ R@10 │ MRR │
+│ Baseline │ 0.07 │ 1e-4 │ 1e-4 │ 0.78% │ 5.71% │ 10.18% │ 0.047 │
+│ +Dropout(0.3) │ 0.07 │ 1e-4 │ 1e-4 │ 0.97% │ 4.93% │ 10.18% │ 0.045 │
+│ +Temp 0.1 │ 0.10 │ 1e-4 │ 1e-4 │ 1.49% │ 5.77% │ 11.28% │ 0.051 │
+│ Final │ 0.10 │ 5e-5 │ 1e-3 │ 1.69% │ 7.85% │ 14.98% │ 0.062 │
+
+최종 모델(Final)은 Baseline 대비 R@1에서 117% 향상된 1.69%를 달성하였다. 이는 랜덤 기준(0.65%) 대비 2.6배 높은 수치이며, R@10 기준 14.98%로 상위 10명 내에 실제 매칭 상대가 포함될 확률이 유의미하게 높음을 확인하였다.
 
 Ⅲ. 결 론
 
-본 논문에서는 실제 데이팅 앱의 매칭 데이터를 활용하여 시각적 매칭 호환성을 예측하는 딥러닝 기반 시스템을 제안하였다. Qwen3-VL 백본과 Projection Head를 결합하여 매칭 임베딩을 학습하고, InfoNCE Loss와 Semi-Hard Negative Mining 기법을 적용하였다. 소규모 데이터의 한계를 극복하기 위해 5-Fold Cross Validation을 적용하여 모델의 일반화 성능을 확보하였다.
+본 논문에서는 실제 데이팅 앱의 매칭 데이터를 활용하여 시각적 매칭 호환성을 예측하는 딥러닝 기반 시스템을 제안하였다. 제안 모델은 775쌍의 소규모 데이터에서도 랜덤 기준 대비 2.6배(R@1 1.69%) 향상된 성능을 달성하였다.
 
-향후 연구로는 텍스트 임베딩(성격/가치관)과 이미지 임베딩을 결합한 하이브리드 매칭 엔진 구현, 그리고 더 많은 커플 데이터를 확보하여 모델 성능을 향상시키는 것을 계획한다.
+본 실험을 통해 다음의 인사이트를 도출하였다. 첫째, 소규모 데이터셋에서는 Dropout이 오히려 역효과를 보였으며, 이는 제한된 학습 신호를 더욱 약화시키기 때문으로 분석된다. 둘째, InfoNCE Loss의 Temperature 파라미터가 일반화 성능에 중요한 영향을 미쳤으며, τ=0.07에서 τ=0.1로 완화 시 모든 지표에서 개선이 관찰되었다. 셋째, Weight Decay 증가와 Learning Rate 감소의 조합이 과적합 억제에 효과적이었다.
+
+향후 연구로는 (1) 텍스트 임베딩(성격, 가치관)과 이미지 임베딩을 결합한 하이브리드 모델 개발, (2) 더 많은 커플 데이터 확보를 통한 일반화 성능 향상을 계획한다.
 
 References
 

@@ -1,0 +1,48 @@
+{
+  "totalPairs": 1085,
+  "positivePairs": 657,
+  "negativePairs": 428,
+  "missingFields": {
+    "mbti": 40,
+    "drinkingFrequency": 79,
+    "smokingStatus": 79,
+    "interests": 79,
+    "imagePaths": 0
+  },
+  "dataDistribution": {
+    "mbtiTypes": {
+      "ISTJ": 126,
+      "ISFP": 274,
+      "ISTP": 246,
+      "INFJ": 124,
+      "ESTP": 108,
+      "INTP": 90,
+      "ENFP": 173,
+      "ESTJ": 117,
+      "ENFJ": 89,
+      "INTJ": 84,
+      "ENTJ": 120,
+      "ISFJ": 124,
+      "ESFP": 109,
+      "INFP": 113,
+      "ENTP": 177,
+      "ESFJ": 56
+    },
+    "drinkingTypes": {
+      "전혀 안마심": 233,
+      "거의 못마심": 524,
+      "적당히 마심": 987,
+      "자주 마심": 305,
+      "매우 즐겨 마심": 42
+    },
+    "smokingTypes": {
+      "비흡연자": 1570,
+      "흡연자": 254,
+      "전자담배": 267
+    }
+  },
+  "collectionPeriod": {
+    "start": "2025-08-01",
+    "end": "2025-12-16"
+  }
+}

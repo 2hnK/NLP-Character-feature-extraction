@@ -18,6 +18,10 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
+from transformers import AutoTokenizer # Optional if needed explicitly
+
+# Suppress tokenizer warning
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -48,45 +52,78 @@ def set_seed(seed):
 def evaluate(model, val_loader, criterion, device, threshold=0.5):
     model.eval()
     total_loss = 0.0
-    correct = 0
-    total = 0
     
-    # Store scores for AUC if needed later
-    all_scores = []
-    all_labels = []
+    # Containers for Retrieval Metric (Recall@K)
+    # We only care about Positive pairs for Retrieval Evaluation
+    # Query: User A from positive pair
+    # Gallery: User B from positive pair (Candidate Pool)
+    pos_emb_a = []
+    pos_emb_b = []
     
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validation"):
             img_a, text_a, img_b, text_b, labels = batch
             labels = labels.to(device)
             
-            # Forward A
+            # Forward
             emb_a = model.forward_with_text(img_a, text_a)
-            # Forward B
             emb_b = model.forward_with_text(img_b, text_b)
             
-            # Loss
+            # Loss (Compute on ALL pairs, both pos and neg)
             loss = criterion(emb_a, emb_b, labels)
             total_loss += loss.item()
             
-            # Accuracy
-            # Cosine Similarity: [-1, 1]
-            cosine_sim = nn.functional.cosine_similarity(emb_a, emb_b)
-            
-            # Binary Prediction: Sim > threshold => 1 (Positive), else -1 (Negative)
-            # Since labels are 1 or -1
-            preds = torch.where(cosine_sim > threshold, 1.0, -1.0)
-            
-            correct += (preds == labels).sum().item()
-            total += labels.size(0)
-            
-            all_scores.extend(cosine_sim.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+            # Collect Positive Pairs for Retrieval Evaluation
+            # labels: 1 (Pos), -1 (Neg)
+            pos_mask = (labels == 1)
+            if pos_mask.sum() > 0:
+                pos_emb_a.append(emb_a[pos_mask].cpu())
+                pos_emb_b.append(emb_b[pos_mask].cpu())
             
     avg_loss = total_loss / len(val_loader)
-    accuracy = correct / total if total > 0 else 0.0
     
-    return avg_loss, accuracy
+    # --- Retrieval Evaluation (Recall@K) ---
+    if len(pos_emb_a) > 0:
+        # Concatenate all positive embeddings
+        query_embs = torch.cat(pos_emb_a, dim=0)   # (N_pos, D)
+        gallery_embs = torch.cat(pos_emb_b, dim=0) # (N_pos, D)
+        
+        # Normalize (already done in model, but safe to redo or ensure)
+        query_embs = nn.functional.normalize(query_embs, p=2, dim=1)
+        gallery_embs = nn.functional.normalize(gallery_embs, p=2, dim=1)
+        
+        # Similarity Matrix: (N_pos, N_pos)
+        # sim[i, j] = similarity between Query i and Gallery j
+        sim_matrix = torch.matmul(query_embs, gallery_embs.t())
+        
+        # Metric Calculation
+        # For each query i, the ground truth match is gallery i.
+        # We calculate the rank of diag[i] among row i.
+        
+        ks = [1, 5, 10]
+        recalls = {k: 0.0 for k in ks}
+        num_queries = query_embs.size(0)
+        
+        for i in range(num_queries):
+            target_sim = sim_matrix[i, i].item()
+            # Count how many gallery items have higher similarity than the target
+            # Note: We subtract 1 because the target itself is in the row? 
+            # No, if target is highest, count is 0. Rank is 1.
+            higher_sim_count = (sim_matrix[i] > target_sim).sum().item()
+            rank = higher_sim_count + 1
+            
+            for k in ks:
+                if rank <= k:
+                    recalls[k] += 1
+        
+        # Average
+        for k in ks:
+            recalls[k] = (recalls[k] / num_queries) * 100.0 # Percent
+            
+        return avg_loss, recalls
+    else:
+        # No positive pairs in validation set?
+        return avg_loss, {1: 0.0, 5: 0.0, 10: 0.0}
 
 def train(args):
     set_seed(args.seed)
@@ -228,18 +265,23 @@ def train(args):
         logger.info(f"Epoch {epoch+1} Train Loss: {avg_train_loss:.4f}")
         
         # Validation
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-        logger.info(f"Epoch {epoch+1} Valid Loss: {val_loss:.4f}, Accuracy: {val_acc:.4f}")
+        val_loss, val_metrics = evaluate(model, val_loader, criterion, device)
+        
+        r1 = val_metrics[1]
+        r5 = val_metrics[5]
+        
+        logger.info(f"Epoch {epoch+1} Valid Loss: {val_loss:.4f}, R@1: {r1:.2f}%, R@5: {r5:.2f}%")
         
         writer.add_scalar("Valid/Loss", val_loss, epoch)
-        writer.add_scalar("Valid/Accuracy", val_acc, epoch)
+        writer.add_scalar("Valid/Recall@1", r1, epoch)
+        writer.add_scalar("Valid/Recall@5", r5, epoch)
         
-        # Save Best
-        if val_acc > best_acc:
-            best_acc = val_acc
+        # Save Best (Based on Recall@1)
+        if r1 > best_acc:
+            best_acc = r1
             save_path = os.path.join(args.output_dir, "best_model.pth")
             torch.save(model.state_dict(), save_path)
-            logger.info(f"New Best Model Saved! (Acc: {best_acc:.4f})")
+            logger.info(f"New Best Model Saved! (R@1: {best_acc:.2f}%)")
             
         # Periodic Save
         if (epoch + 1) % 5 == 0:

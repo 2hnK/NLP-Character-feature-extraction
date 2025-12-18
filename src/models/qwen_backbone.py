@@ -431,7 +431,7 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
         embeddings = 0.7 * vision_emb + 0.3 * text_emb
 
         # Normalize
-        embeddings = nn.functional.normalize(embeddings, p=2, dim=1)
+        embeddings = nn.functional.normalize(embeddings, p=2, dim=1, eps=1e-8)
 
         return embeddings
 

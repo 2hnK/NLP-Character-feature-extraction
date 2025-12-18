@@ -271,7 +271,19 @@ def train(args):
                 # logger.warning(f"Batch mismatch: Labels={labels.size(0)}, EmbA={emb_a.size(0)}")
                 continue
 
+            # Debug: Check for NaNs
+            if torch.isnan(emb_a).any() or torch.isnan(emb_b).any():
+                logger.error("NaN detected in embeddings!")
+                logger.error(f"Labels: {labels}")
+                continue
+                
             loss = criterion(emb_a, emb_b, labels)
+            
+            # Debug: Check first batch labels
+            if global_step == 0:
+                n_pos = (labels == 1).sum().item()
+                n_neg = (labels == -1).sum().item()
+                logger.info(f"Batch 0 Stats: Pos={n_pos}, Neg={n_neg}")
             
             loss.backward()
             

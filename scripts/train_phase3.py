@@ -310,6 +310,7 @@ def train(args):
     logger.info("Hyperparameters:")
     logger.info(f"  epochs: {args.epochs}")
     logger.info(f"  batch_size: {args.batch_size}")
+    logger.info(f"  gradient_accumulation_steps: {args.gradient_accumulation_steps}")
     logger.info(f"  learning_rate: {args.learning_rate}")
     logger.info(f"  weight_decay: {args.weight_decay}")
     logger.info(f"  margin: {args.margin}")
@@ -394,15 +395,18 @@ def train(args):
         weight_decay=args.weight_decay
     )
 
-    # Learning Rate Scheduler
-    num_training_steps = len(train_loader) * args.epochs
-    num_warmup_steps = len(train_loader) * args.warmup_epochs
+    # Learning Rate Scheduler (adjusted for gradient accumulation)
+    effective_batch_size = args.batch_size * args.gradient_accumulation_steps
+    num_update_steps_per_epoch = len(train_loader) // args.gradient_accumulation_steps
+    num_training_steps = num_update_steps_per_epoch * args.epochs
+    num_warmup_steps = num_update_steps_per_epoch * args.warmup_epochs
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=num_warmup_steps,
         num_training_steps=num_training_steps,
         min_lr_ratio=args.min_lr / args.learning_rate
     )
+    logger.info(f"Effective batch size: {effective_batch_size} (batch_size={args.batch_size} x accumulation={args.gradient_accumulation_steps})")
 
     # Loss function with Hard Negative Mining
     criterion = HardNegativeMiningLoss(
@@ -434,6 +438,8 @@ def train(args):
         total_hard_neg_loss = 0.0
         total_diversity_loss = 0.0
 
+        optimizer.zero_grad()  # Zero gradients at start of epoch
+
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs} [Train]")
         for i, batch in enumerate(pbar):
             if batch is None:
@@ -441,8 +447,6 @@ def train(args):
 
             img_a, text_a, img_b, text_b, labels = batch
             labels = labels.to(device)
-
-            optimizer.zero_grad()
 
             emb_a = model.forward_with_text(img_a, text_a)
             emb_b = model.forward_with_text(img_b, text_b)
@@ -456,29 +460,36 @@ def train(args):
 
             loss, loss_components = criterion(emb_a, emb_b, labels)
 
+            # Scale loss for gradient accumulation
+            loss = loss / args.gradient_accumulation_steps
+
             if epoch == 0 and i == 0:
                 n_pos = (labels == 1).sum().item()
                 n_neg = (labels == -1).sum().item()
                 logger.info(f"Batch 0 Stats: Pos={n_pos}, Neg={n_neg}")
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            scheduler.step()
 
-            total_loss += loss.item()
+            # Update weights every gradient_accumulation_steps
+            if (i + 1) % args.gradient_accumulation_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+
+            total_loss += loss.item() * args.gradient_accumulation_steps  # Unscale for logging
             total_base_loss += loss_components['base_loss']
             total_hard_neg_loss += loss_components['hard_neg_loss']
             total_diversity_loss += loss_components['diversity_loss']
 
             current_lr = scheduler.get_last_lr()[0]
             pbar.set_postfix({
-                'loss': f"{loss.item():.4f}",
+                'loss': f"{loss.item() * args.gradient_accumulation_steps:.4f}",
                 'lr': f"{current_lr:.2e}"
             })
 
             global_step = epoch * len(train_loader) + i
-            writer.add_scalar("Train/Loss", loss.item(), global_step)
+            writer.add_scalar("Train/Loss", loss.item() * args.gradient_accumulation_steps, global_step)
             writer.add_scalar("Train/BaseLoss", loss_components['base_loss'], global_step)
             writer.add_scalar("Train/HardNegLoss", loss_components['hard_neg_loss'], global_step)
             writer.add_scalar("Train/DiversityLoss", loss_components['diversity_loss'], global_step)
@@ -569,7 +580,8 @@ if __name__ == "__main__":
 
     # Training - Updated values
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=2)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--weight_decay", type=float, default=1e-2)

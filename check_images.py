@@ -91,8 +91,8 @@ def check_one_user(image_root, pair_id, gender):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Verify local image existence for dataset")
-    parser.add_argument("--dataset_jsonl", type=str, default="data/dataset.jsonl", help="Path to jsonl file")
-    parser.add_argument("--image_root", type=str, default="data/images", help="Path to images directory")
+    parser.add_argument("--dataset_jsonl", type=str, default="/home/sagemaker-user/data/dataset.jsonl", help="Path to jsonl file")
+    parser.add_argument("--image_root", type=str, default="/home/sagemaker-user/data/images", help="Path to images directory")
     
     args = parser.parse_args()
     

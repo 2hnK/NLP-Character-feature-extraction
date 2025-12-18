@@ -402,8 +402,9 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
 
         # Split into vision and text features
         # This is simplified - in practice, you might want to separate them differently
-        vision_features = pooled_features
-        text_features = pooled_features
+        # Ensure float32 for projection head consistency
+        vision_features = pooled_features.to(dtype=torch.float32)
+        text_features = pooled_features.to(dtype=torch.float32)
 
         # Ensure projection head is initialized based on hidden dimension
         hidden_dim = vision_features.shape[-1]

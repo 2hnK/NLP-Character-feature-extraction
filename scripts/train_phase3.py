@@ -91,7 +91,7 @@ def evaluate(model, val_loader, criterion, device, threshold=0.5):
             
     avg_loss = total_loss / len(val_loader)
     
-    # --- Retrieval Evaluation (Recall@K) ---
+    # --- Retrieval Evaluation (Recall@K & MRR) ---
     if len(pos_emb_a) > 0:
         # Concatenate all positive embeddings
         query_embs = torch.cat(pos_emb_a, dim=0)   # (N_pos, D)
@@ -109,17 +109,21 @@ def evaluate(model, val_loader, criterion, device, threshold=0.5):
         # For each query i, the ground truth match is gallery i.
         # We calculate the rank of diag[i] among row i.
         
-        ks = [1, 5, 10]
+        ks = [1, 5, 10, 20, 50]
         recalls = {k: 0.0 for k in ks}
+        mrr = 0.0
         num_queries = query_embs.size(0)
         
         for i in range(num_queries):
             target_sim = sim_matrix[i, i].item()
             # Count how many gallery items have higher similarity than the target
-            # Note: We subtract 1 because the target itself is in the row? 
-            # No, if target is highest, count is 0. Rank is 1.
+            # Note: We subtract 1 because the target itself is in the row check? 
+            # No, higher_sim_count = number of items strictly greater than target.
+            # Rank = higher_sim_count + 1.
             higher_sim_count = (sim_matrix[i] > target_sim).sum().item()
             rank = higher_sim_count + 1
+            
+            mrr += 1.0 / rank
             
             for k in ks:
                 if rank <= k:
@@ -128,11 +132,14 @@ def evaluate(model, val_loader, criterion, device, threshold=0.5):
         # Average
         for k in ks:
             recalls[k] = (recalls[k] / num_queries) * 100.0 # Percent
+        
+        mrr = mrr / num_queries
+        recalls['mrr'] = mrr
             
         return avg_loss, recalls
     else:
         # No positive pairs in validation set?
-        return avg_loss, {1: 0.0, 5: 0.0, 10: 0.0}
+        return avg_loss, {1: 0.0, 5: 0.0, 10: 0.0, 20: 0.0, 50: 0.0, 'mrr': 0.0}
 
 def train(args):
     set_seed(args.seed)
@@ -287,12 +294,16 @@ def train(args):
         
         r1 = val_metrics[1]
         r5 = val_metrics[5]
+        r20 = val_metrics[20]
+        mrr = val_metrics['mrr']
         
-        logger.info(f"Epoch {epoch+1} Valid Loss: {val_loss:.4f}, R@1: {r1:.2f}%, R@5: {r5:.2f}%")
+        logger.info(f"Epoch {epoch+1} Valid Loss: {val_loss:.4f}, R@1: {r1:.2f}%, R@5: {r5:.2f}%, R@20: {r20:.2f}%, MRR: {mrr:.4f}")
         
         writer.add_scalar("Valid/Loss", val_loss, epoch)
         writer.add_scalar("Valid/Recall@1", r1, epoch)
         writer.add_scalar("Valid/Recall@5", r5, epoch)
+        writer.add_scalar("Valid/Recall@20", r20, epoch)
+        writer.add_scalar("Valid/MRR", mrr, epoch)
         
         # Save Best (Based on Recall@1)
         if r1 > best_acc:

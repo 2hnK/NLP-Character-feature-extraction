@@ -91,6 +91,8 @@ def evaluate(model, val_loader, criterion, device, threshold=0.5):
     avg_loss = total_loss / len(val_loader)
     
     # --- Retrieval Evaluation (Recall@K & MRR) ---
+    logger.info(f"Number of valid positive pairs for evaluation: {len(pos_emb_a)}")
+    
     if len(pos_emb_a) > 0:
         # Concatenate all positive embeddings
         query_embs = torch.cat(pos_emb_a, dim=0)   # (N_pos, D)

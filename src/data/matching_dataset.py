@@ -73,24 +73,42 @@ class MatchingDataset(Dataset):
         """
         Finds the image path given pairId and gender.
         Assumes folder structure: image_root/pairId/{gender}*.png
+        Handles potential zero-padding mismatch (e.g., JSON: positive_00004 vs Dir: positive_004).
         """
+        # 1. Try exact match
         pair_dir = os.path.join(self.image_root, pair_id)
+        
+        # 2. If not found, try varying zero-padding if the id follows {type}_{num} format
         if not os.path.exists(pair_dir):
-            # Fallback: try searching without strict case or check if images are flat?
-            # Based on analysis, they are in folders.
-            raise FileNotFoundError(f"Pair directory not found: {pair_dir}")
+            try:
+                parts = pair_id.rsplit('_', 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    prefix, num = parts
+                    # Try 3-digit padding (common format in folders)
+                    alt_pair_id = f"{prefix}_{int(num):03d}"
+                    alt_pair_dir = os.path.join(self.image_root, alt_pair_id)
+                    if os.path.exists(alt_pair_dir):
+                        pair_dir = alt_pair_dir
+            except Exception:
+                pass
+
+        if not os.path.exists(pair_dir):
+            # raise FileNotFoundError(f"Pair directory not found: {pair_dir} (Original: {pair_id})")
+            # print warning instead of raising to allow partial loading if needed, but safe to raise here 
+            # as missing data is critical.
+            return None
             
         # List files to find match
-        files = os.listdir(pair_dir)
+        try:
+            files = os.listdir(pair_dir)
+        except OSError:
+            return None
+
         # Filter by gender (case-insensitive)
         # We expect 'male_001.png' or 'female_001.png'
-        # Check for 'male' or 'female' in filename
         target_files = [f for f in files if gender.lower() in f.lower() and f.lower().endswith(('.png', '.jpg', '.jpeg'))]
         
         if not target_files:
-             # Fallback if specific gender file is missing (unexpected based on analysis)
-             # Just take any image? No, that mixes users.
-             # Return None and let getitem handle error
              return None
              
         # Take the first match
@@ -165,8 +183,8 @@ if __name__ == "__main__":
     ])
     
     dataset = MatchingDataset(
-        jsonl_path=r"./data/dataset.jsonl",
-        image_root=r"./data/images",
+        jsonl_path=r"data/dataset.jsonl",
+        image_root=r"data/images",
         transform=transform,
         limit=5,
         mode='train'

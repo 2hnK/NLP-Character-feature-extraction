@@ -250,8 +250,8 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_jsonl", type=str, default="./data/dataset.jsonl")
-    parser.add_argument("--image_root", type=str, default="./data/images")
+    parser.add_argument("--dataset_jsonl", type=str, default="data/dataset.jsonl")
+    parser.add_argument("--image_root", type=str, default="data/images")
     parser.add_argument("--output_dir", type=str, default="./checkpoints_phase3")
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-VL-2B-Instruct")
     parser.add_argument("--epochs", type=int, default=10)

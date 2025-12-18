@@ -60,10 +60,28 @@ def check_images(jsonl_path, image_root):
 def check_one_user(image_root, pair_id, gender):
     # Logic matches MatchingDataset._get_image_path
     pair_dir = os.path.join(image_root, pair_id)
+    
+    # Handle zero-padding mismatch
+    if not os.path.exists(pair_dir):
+        try:
+            parts = pair_id.rsplit('_', 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                prefix, num = parts
+                alt_pair_id = f"{prefix}_{int(num):03d}"
+                alt_pair_dir = os.path.join(image_root, alt_pair_id)
+                if os.path.exists(alt_pair_dir):
+                    pair_dir = alt_pair_dir
+        except Exception:
+            pass
+
     if not os.path.exists(pair_dir):
         return False
         
-    files = os.listdir(pair_dir)
+    try:
+        files = os.listdir(pair_dir)
+    except OSError:
+        return False
+        
     # Search for gender keyword in filename (case-insensitive)
     for f in files:
         if gender.lower() in f.lower() and f.lower().endswith(('.png', '.jpg', '.jpeg')):
@@ -73,8 +91,8 @@ def check_one_user(image_root, pair_id, gender):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Verify local image existence for dataset")
-    parser.add_argument("--dataset_jsonl", type=str, default="./data/dataset.jsonl", help="Path to jsonl file")
-    parser.add_argument("--image_root", type=str, default="./data/images", help="Path to images directory")
+    parser.add_argument("--dataset_jsonl", type=str, default="data/dataset.jsonl", help="Path to jsonl file")
+    parser.add_argument("--image_root", type=str, default="data/images", help="Path to images directory")
     
     args = parser.parse_args()
     

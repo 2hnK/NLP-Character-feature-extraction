@@ -34,7 +34,7 @@ class MatchingDataset(Dataset):
             seed (int): Random seed for splitting.
         """
         self.jsonl_path = jsonl_path
-        self.image_root = image_root
+        self.image_root = os.path.abspath(image_root)
         self.transform = transform
         self.mode = mode
         
@@ -165,8 +165,8 @@ if __name__ == "__main__":
     ])
     
     dataset = MatchingDataset(
-        jsonl_path=r"c:\Users\kimgh\Downloads\data\dataset.jsonl",
-        image_root=r"c:\Users\kimgh\Downloads\data\images",
+        jsonl_path=r"./data/dataset.jsonl",
+        image_root=r"./data/images",
         transform=transform,
         limit=5,
         mode='train'

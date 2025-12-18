@@ -69,6 +69,15 @@ def evaluate(model, val_loader, criterion, device, threshold=0.5):
             emb_a = model.forward_with_text(img_a, text_a)
             emb_b = model.forward_with_text(img_b, text_b)
             
+            # Safety Check for Batch Size Mismatch
+            if emb_a.size(0) != labels.size(0) or emb_b.size(0) != labels.size(0):
+               continue
+            
+            # Safety Check for Batch Size Mismatch (e.g. if processor dropped an image)
+            if emb_a.size(0) != labels.size(0) or emb_b.size(0) != labels.size(0):
+                print(f"[WARN] Batch size mismatch in evaluation. Labels: {labels.size(0)}, EmbA: {emb_a.size(0)}, EmbB: {emb_b.size(0)}")
+                continue
+
             # Loss (Compute on ALL pairs, both pos and neg)
             loss = criterion(emb_a, emb_b, labels)
             total_loss += loss.item()
@@ -250,9 +259,18 @@ def train(args):
             emb_a = model.forward_with_text(img_a, text_a)
             emb_b = model.forward_with_text(img_b, text_b)
             
+            # Safety Check for Batch Size Mismatch
+            if emb_a.size(0) != labels.size(0) or emb_b.size(0) != labels.size(0):
+                # logger.warning(f"Batch mismatch: Labels={labels.size(0)}, EmbA={emb_a.size(0)}")
+                continue
+
             loss = criterion(emb_a, emb_b, labels)
             
             loss.backward()
+            
+            # Gradient Clipping to prevent NaN
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             optimizer.step()
             
             total_loss += loss.item()
@@ -261,7 +279,7 @@ def train(args):
             global_step = epoch * len(train_loader) + pbar.n
             writer.add_scalar("Train/Loss", loss.item(), global_step)
             
-        avg_train_loss = total_loss / len(train_loader)
+        avg_train_loss = total_loss / len(train_loader) if len(train_loader) > 0 else 0.0
         logger.info(f"Epoch {epoch+1} Train Loss: {avg_train_loss:.4f}")
         
         # Validation

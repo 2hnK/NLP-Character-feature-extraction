@@ -359,27 +359,33 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
         Returns:
             embeddings: Combined embeddings
         """
-        # Prepare multimodal inputs
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": img},
-                    {"type": "text", "text": desc}
-                ]
-            }
+        # Prepare multimodal inputs - each sample as a separate conversation
+        # conversations is a list of lists (batch of conversations)
+        conversations = [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": img},
+                        {"type": "text", "text": desc}
+                    ]
+                }
+            ]
             for img, desc in zip(images, text_descriptions)
         ]
 
-        # Process through model
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        # Process through model - apply chat template to each conversation
+        texts = [
+            self.processor.apply_chat_template(
+                conv, tokenize=False, add_generation_prompt=True
+            )
+            for conv in conversations
+        ]
 
-        image_inputs, video_inputs = process_vision_info(messages)
+        image_inputs, video_inputs = process_vision_info(conversations)
 
         inputs = self.processor(
-            text=text,
+            text=texts,
             images=image_inputs,
             videos=video_inputs,
             padding=True,

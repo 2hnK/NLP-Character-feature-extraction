@@ -2,6 +2,7 @@
 Dataset Review Script for dataset.jsonl
 """
 import json
+import argparse
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -139,4 +140,7 @@ def analyze_dataset(filepath):
     print("\n=== 검토 완료 ===")
 
 if __name__ == "__main__":
-    analyze_dataset(r"c:\Users\kimgh\Downloads\data\dataset.jsonl")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset_jsonl", type=str, default="/home/sagemaker-user/data/dataset.jsonl")
+    args = parser.parse_args()
+    analyze_dataset(args.dataset_jsonl)

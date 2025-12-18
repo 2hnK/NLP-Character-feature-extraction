@@ -218,46 +218,11 @@ def train(args):
         total_loss = 0.0
         
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs} [Train]")
-        for batch in pbar:
+        for i, batch in enumerate(pbar):
             img_a, text_a, img_b, text_b, labels = batch
             
             # To Device (Images & Labels only, text is list)
             labels = labels.to(device)
-            # Images need to be moved inside forward if using PIL list, but here they are tensors
-            # Qwen model expects list of PIL or tensors?
-            # My transform outputs tensors.
-            # Qwen3VLWithTextFeatureExtractor.forward handles tensors if structured correctly.
-            # But wait, Qwen3VLWithTextFeatureExtractor.forward_with_text expects 'images: List of PIL Images'.
-            # Let's convert tensors back to PIL or modify model to accept tensors?
-            # Creating PIL from tensor every step is slow.
-            # Ideally, we should pass PIL images directly from Dataset.
-            # But DataLoader collation with PIL images requires custom collate.
-            # Let's adjust Dataset to return PIL if model expects PIL.
-            pass
-            
-            # Re-implementation needed: Model expects list of PIL images for 'text' processing usually?
-            # Let's check model code.
-            # forward_with_text:
-            # messages = [ { "role": "user", "content": [ {"type": "image", "image": img}, {"type": "text", "text": desc} ] } ... ]
-            # processor.apply_chat_template -> processor()
-            # The processor handles PIL images.
-            # So we should pass PIL images.
-            
-            # But we applied transform to tensors in Dataset!
-            # FIX: We should NOT apply ToTensor in Dataset if we want to pass PIL to processor.
-            # But we might need resizing.
-            
-            # Let's fix this logic quickly.
-            # We will use a custom transform that only resizes but keeps PIL.
-            # Then we move to device inside model logic (which calls processor).
-            # BUT, data loading might be slow if we pass PIL through workers?
-            # It's okay for this scale.
-            
-            # Since we can't change Dataset file in this tool call easily (it's already written),
-            # let's assume we change transform in main() to NOT convert to tensor.
-            
-            # Convert tensors back to PIL for now if needed? No, that's wasteful.
-            # We will change the transform in main() below to just Resize.
             pass
             
             optimizer.zero_grad()
@@ -268,9 +233,8 @@ def train(args):
             
             # Safety Check for Batch Size Mismatch
             if emb_a.size(0) != labels.size(0) or emb_b.size(0) != labels.size(0):
-                # logger.warning(f"Batch mismatch: Labels={labels.size(0)}, EmbA={emb_a.size(0)}")
-                continue
-
+               continue
+            
             # Debug: Check for NaNs
             if torch.isnan(emb_a).any() or torch.isnan(emb_b).any():
                 logger.error("NaN detected in embeddings!")
@@ -280,7 +244,7 @@ def train(args):
             loss = criterion(emb_a, emb_b, labels)
             
             # Debug: Check first batch labels
-            if global_step == 0:
+            if epoch == 0 and i == 0:
                 n_pos = (labels == 1).sum().item()
                 n_neg = (labels == -1).sum().item()
                 logger.info(f"Batch 0 Stats: Pos={n_pos}, Neg={n_neg}")
@@ -295,7 +259,7 @@ def train(args):
             total_loss += loss.item()
             pbar.set_postfix({'loss': loss.item()})
             
-            global_step = epoch * len(train_loader) + pbar.n
+            global_step = epoch * len(train_loader) + i
             writer.add_scalar("Train/Loss", loss.item(), global_step)
             
         avg_train_loss = total_loss / len(train_loader) if len(train_loader) > 0 else 0.0

@@ -172,6 +172,15 @@ def train(args):
         seed=args.seed
     )
     
+    test_dataset = MatchingDataset(
+        jsonl_path=args.dataset_jsonl,
+        image_root=args.image_root,
+        transform=transform,
+        mode='test',
+        split_ratio=args.split_ratio,
+        seed=args.seed
+    )
+    
     # Collate fn for list of PIL images and strings
     def collate_fn(batch):
         # batch is list of tuples: (img_a, text_a, img_b, text_b, label) or None
@@ -189,8 +198,9 @@ def train(args):
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, collate_fn=collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn)
     
-    logger.info(f"Train Size: {len(train_dataset)}, Valid Size: {len(val_dataset)}")
+    logger.info(f"Train Size: {len(train_dataset)}, Valid Size: {len(val_dataset)}, Test Size: {len(test_dataset)}")
     
     # 2. Model
     logger.info(f"Loading Model: {args.model_name}")
@@ -298,6 +308,29 @@ def train(args):
             torch.save(model.state_dict(), os.path.join(args.output_dir, f"checkpoint_epoch_{epoch+1}.pth"))
 
     logger.info("Training Complete.")
+    
+    # --- Final Test Evaluation ---
+    logger.info("Starting Evaluation on Test Set...")
+    # Load Best Model
+    best_model_path = os.path.join(args.output_dir, "best_model.pth")
+    if os.path.exists(best_model_path):
+        logger.info(f"Loading best model from {best_model_path}")
+        model.load_state_dict(torch.load(best_model_path))
+    
+    test_loss, test_recalls = evaluate(model, test_loader, criterion, device)
+    
+    logger.info(f"Test Loss: {test_loss:.4f}")
+    if isinstance(test_recalls, dict):
+        recall_str = ", ".join([f"R@{k}: {v:.2f}%" for k, v in test_recalls.items() if k != 'mrr'])
+        logger.info(f"Test Metrics: {recall_str}, MRR: {test_recalls.get('mrr', 0.0):.4f}")
+        
+        # TensorBoard Test Log
+        for k in [1, 5, 10, 20, 50]:
+            if k in test_recalls:
+                writer.add_scalar(f"Test/Recall@{k}", test_recalls[k], global_step)
+        if 'mrr' in test_recalls:
+            writer.add_scalar("Test/MRR", test_recalls['mrr'], global_step)
+            
     writer.close()
 
 if __name__ == "__main__":

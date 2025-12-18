@@ -29,8 +29,9 @@ class MatchingDataset(Dataset):
             image_root (str): Root directory containing pairId folders (e.g., c:/.../data/images)
             transform (callable, optional): Transform for images.
             limit (int, optional): Limit data size for debugging.
-            mode (str): 'train' or 'valid' to split data.
-            split_ratio (float): Ratio for training data.
+            limit (int, optional): Limit data size for debugging.
+            mode (str): 'train', 'valid', or 'test' to split data.
+            split_ratio (float): Ratio for training data (default 0.8). Valid/Test split remaining 50/50.
             seed (int): Random seed for splitting.
         """
         self.jsonl_path = jsonl_path
@@ -55,11 +56,26 @@ class MatchingDataset(Dataset):
         random.seed(seed)
         random.shuffle(all_data)
         
-        split_idx = int(len(all_data) * split_ratio)
+        # Split Ratios: 80% Train, 10% Valid, 10% Test
+        # Or customize via arguments if needed, but fixed logic for now:
+        # train_ratio = split_ratio (e.g., 0.8)
+        # remaining = 1.0 - split_ratio
+        # valid_ratio = remaining / 2
+        # test_ratio = remaining / 2
+        
+        n_total = len(all_data)
+        n_train = int(n_total * split_ratio)
+        n_valid = int(n_total * ((1.0 - split_ratio) / 2))
+        # n_test = n_total - n_train - n_valid
+        
         if mode == 'train':
-            self.data = all_data[:split_idx]
+            self.data = all_data[:n_train]
+        elif mode == 'valid':
+            self.data = all_data[n_train:n_train+n_valid]
+        elif mode == 'test':
+            self.data = all_data[n_train+n_valid:]
         else:
-            self.data = all_data[split_idx:]
+            raise ValueError(f"Unknown mode: {mode}")
             
         if limit:
             self.data = self.data[:limit]

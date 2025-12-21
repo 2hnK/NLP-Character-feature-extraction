@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim.lr_scheduler import LambdaLR
+from torch.amp import autocast, GradScaler
 
 # Suppress tokenizer warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -152,13 +153,26 @@ class HardNegativeMiningLoss(nn.Module):
             # Penalize high off-diagonal similarities
             diversity_loss = F.relu(off_diag_sim - 0.5 / self.temperature).mean()
 
-        # Combined loss
-        total_loss = base_loss + 0.5 * hard_neg_loss + 0.1 * diversity_loss
+        # === Part 4: Variance Regularization (VICReg-style, critical for collapse prevention) ===
+        # Ensures each dimension has sufficient variance
+        variance_loss = torch.tensor(0.0, device=emb_a.device)
+
+        if batch_size > 1:
+            # Variance along batch dimension for each feature
+            std_a = emb_a_norm.std(dim=0)
+            std_b = emb_b_norm.std(dim=0)
+            # Hinge loss: penalize if std falls below threshold (1.0 for normalized embeddings)
+            var_target = 1.0 / (emb_a.size(1) ** 0.5)  # Target std for uniform distribution
+            variance_loss = (F.relu(var_target - std_a).mean() + F.relu(var_target - std_b).mean()) / 2
+
+        # Combined loss (increased diversity weight to prevent collapse)
+        total_loss = base_loss + 0.5 * hard_neg_loss + 0.3 * diversity_loss + 0.25 * variance_loss
 
         return total_loss, {
             'base_loss': base_loss.item(),
             'hard_neg_loss': hard_neg_loss.item() if isinstance(hard_neg_loss, torch.Tensor) else hard_neg_loss,
-            'diversity_loss': diversity_loss.item() if isinstance(diversity_loss, torch.Tensor) else diversity_loss
+            'diversity_loss': diversity_loss.item() if isinstance(diversity_loss, torch.Tensor) else diversity_loss,
+            'variance_loss': variance_loss.item() if isinstance(variance_loss, torch.Tensor) else variance_loss
         }
 
 
@@ -311,6 +325,7 @@ def train(args):
     logger.info(f"  epochs: {args.epochs}")
     logger.info(f"  batch_size: {args.batch_size}")
     logger.info(f"  gradient_accumulation_steps: {args.gradient_accumulation_steps}")
+    logger.info(f"  freeze_backbone: {args.freeze_backbone}")
     logger.info(f"  learning_rate: {args.learning_rate}")
     logger.info(f"  weight_decay: {args.weight_decay}")
     logger.info(f"  margin: {args.margin}")
@@ -318,6 +333,7 @@ def train(args):
     logger.info(f"  mining_strategy: {args.mining_strategy}")
     logger.info(f"  warmup_epochs: {args.warmup_epochs}")
     logger.info(f"  early_stopping_patience: {args.patience}")
+    logger.info(f"  use_amp: {args.use_amp}")
     logger.info("=" * 50)
 
     # Dataset & DataLoader
@@ -388,9 +404,37 @@ def train(args):
         device=device
     )
 
-    # Optimizer
+    # Initialize projection heads with a dummy forward pass
+    # This is required because projection heads are lazily initialized
+    logger.info("Initializing projection heads...")
+    from PIL import Image
+    import numpy as np
+    dummy_img = Image.fromarray(np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8))
+    with torch.no_grad():
+        _ = model.forward_with_text([dummy_img], ["dummy text"])
+    logger.info("Projection heads initialized")
+
+    # Freeze backbone if requested (saves memory, allows larger batch)
+    if args.freeze_backbone:
+        # Freeze all parameters in the base model (Qwen)
+        for param in model.model.parameters():
+            param.requires_grad = False
+        logger.info("Backbone FROZEN - only training projection heads")
+
+        # Count trainable parameters
+        trainable_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in model.parameters())
+        logger.info(f"Trainable params: {trainable_count:,} / {total_params:,} ({100*trainable_count/total_params:.2f}%)")
+    else:
+        # Enable gradient checkpointing to save memory (only if not frozen)
+        if hasattr(model.model, 'gradient_checkpointing_enable'):
+            model.model.gradient_checkpointing_enable()
+            logger.info("Gradient checkpointing enabled")
+
+    # Optimizer - only optimize parameters that require gradients
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        trainable_params,
         lr=args.learning_rate,
         weight_decay=args.weight_decay
     )
@@ -422,6 +466,11 @@ def train(args):
         mode='max'
     )
 
+    # Mixed Precision Scaler
+    scaler = GradScaler('cuda', enabled=args.use_amp)
+    if args.use_amp:
+        logger.info("Mixed precision (AMP) enabled")
+
     # Training setup
     os.makedirs(args.output_dir, exist_ok=True)
     writer = SummaryWriter(log_dir=os.path.join(args.output_dir, "runs"))
@@ -437,6 +486,7 @@ def train(args):
         total_base_loss = 0.0
         total_hard_neg_loss = 0.0
         total_diversity_loss = 0.0
+        total_variance_loss = 0.0
 
         optimizer.zero_grad()  # Zero gradients at start of epoch
 
@@ -448,32 +498,37 @@ def train(args):
             img_a, text_a, img_b, text_b, labels = batch
             labels = labels.to(device)
 
-            emb_a = model.forward_with_text(img_a, text_a)
-            emb_b = model.forward_with_text(img_b, text_b)
+            # Forward pass with AMP
+            with autocast('cuda', enabled=args.use_amp):
+                emb_a = model.forward_with_text(img_a, text_a)
+                emb_b = model.forward_with_text(img_b, text_b)
 
-            if emb_a.size(0) != labels.size(0) or emb_b.size(0) != labels.size(0):
-                continue
+                if emb_a.size(0) != labels.size(0) or emb_b.size(0) != labels.size(0):
+                    continue
 
-            if torch.isnan(emb_a).any() or torch.isnan(emb_b).any():
-                logger.error("NaN detected in embeddings!")
-                continue
+                if torch.isnan(emb_a).any() or torch.isnan(emb_b).any():
+                    logger.error("NaN detected in embeddings!")
+                    continue
 
-            loss, loss_components = criterion(emb_a, emb_b, labels)
+                loss, loss_components = criterion(emb_a, emb_b, labels)
 
-            # Scale loss for gradient accumulation
-            loss = loss / args.gradient_accumulation_steps
+                # Scale loss for gradient accumulation
+                loss = loss / args.gradient_accumulation_steps
 
             if epoch == 0 and i == 0:
                 n_pos = (labels == 1).sum().item()
                 n_neg = (labels == -1).sum().item()
                 logger.info(f"Batch 0 Stats: Pos={n_pos}, Neg={n_neg}")
 
-            loss.backward()
+            # Backward with scaler
+            scaler.scale(loss).backward()
 
             # Update weights every gradient_accumulation_steps
             if (i + 1) % args.gradient_accumulation_steps == 0:
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
                 optimizer.zero_grad()
 
@@ -481,6 +536,7 @@ def train(args):
             total_base_loss += loss_components['base_loss']
             total_hard_neg_loss += loss_components['hard_neg_loss']
             total_diversity_loss += loss_components['diversity_loss']
+            total_variance_loss += loss_components.get('variance_loss', 0.0)
 
             current_lr = scheduler.get_last_lr()[0]
             pbar.set_postfix({
@@ -493,6 +549,7 @@ def train(args):
             writer.add_scalar("Train/BaseLoss", loss_components['base_loss'], global_step)
             writer.add_scalar("Train/HardNegLoss", loss_components['hard_neg_loss'], global_step)
             writer.add_scalar("Train/DiversityLoss", loss_components['diversity_loss'], global_step)
+            writer.add_scalar("Train/VarianceLoss", loss_components.get('variance_loss', 0.0), global_step)
             writer.add_scalar("Train/LR", current_lr, global_step)
 
         num_batches = max(len(train_loader), 1)
@@ -500,9 +557,10 @@ def train(args):
         avg_base_loss = total_base_loss / num_batches
         avg_hard_neg_loss = total_hard_neg_loss / num_batches
         avg_diversity_loss = total_diversity_loss / num_batches
+        avg_variance_loss = total_variance_loss / num_batches
 
         logger.info(f"Epoch {epoch+1} Train Loss: {avg_train_loss:.4f} "
-                   f"(base: {avg_base_loss:.4f}, hard_neg: {avg_hard_neg_loss:.4f}, div: {avg_diversity_loss:.4f})")
+                   f"(base: {avg_base_loss:.4f}, hard_neg: {avg_hard_neg_loss:.4f}, div: {avg_diversity_loss:.4f}, var: {avg_variance_loss:.4f})")
 
         # Validation
         val_loss, val_metrics = evaluate(model, val_loader, criterion, device)
@@ -576,32 +634,39 @@ if __name__ == "__main__":
 
     # Model
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-VL-2B-Instruct")
-    parser.add_argument("--embedding_dim", type=int, default=256)
+    parser.add_argument("--embedding_dim", type=int, default=512)  # Increased for better representation
+    parser.add_argument("--freeze_backbone", action="store_true", default=True,
+                       help="Freeze backbone and only train projection heads (saves memory)")
+    parser.add_argument("--no_freeze_backbone", action="store_false", dest="freeze_backbone")
 
-    # Training - Updated values
+    # Training - Updated values (aligned with train_couple_matching.py)
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
-    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--batch_size", type=int, default=48)  # Larger batch for better contrastive learning
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--learning_rate", type=float, default=5e-5)
     parser.add_argument("--min_lr", type=float, default=1e-6)
-    parser.add_argument("--weight_decay", type=float, default=1e-2)
-    parser.add_argument("--warmup_epochs", type=int, default=3)
+    parser.add_argument("--weight_decay", type=float, default=1e-3)
+    parser.add_argument("--warmup_epochs", type=int, default=2)
 
     # Loss function
-    parser.add_argument("--margin", type=float, default=0.5)
-    parser.add_argument("--temperature", type=float, default=0.07)
+    parser.add_argument("--margin", type=float, default=0.4)
+    parser.add_argument("--temperature", type=float, default=0.1)  # Smoother distribution
     parser.add_argument("--mining_strategy", type=str, default="semi-hard", choices=["hard", "semi-hard"])
 
     # Early stopping
-    parser.add_argument("--patience", type=int, default=7)
+    parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--min_delta", type=float, default=0.5)
+
+    # Mixed precision
+    parser.add_argument("--use_amp", action="store_true", default=True)
+    parser.add_argument("--no_amp", action="store_false", dest="use_amp")
 
     # Collapse detection
     parser.add_argument("--collapse_threshold", type=float, default=0.05)
 
     # Data
     parser.add_argument("--split_ratio", type=float, default=0.8)
-    parser.add_argument("--image_size", type=int, default=448)
+    parser.add_argument("--image_size", type=int, default=448)  # Can use larger with frozen backbone
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num_workers", type=int, default=0)
 

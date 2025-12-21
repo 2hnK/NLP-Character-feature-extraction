@@ -102,12 +102,18 @@ class Qwen3VLFeatureExtractor(nn.Module):
 
         if self.use_projection_head:
             # Keep projection head in float32 for numerical stability
+            # 3-layer MLP with wider hidden dims to prevent embedding collapse
+            hidden_dim = max(self.embedding_dim * 4, 2048)
             self.projection_head = nn.Sequential(
-                nn.Linear(self.vision_hidden_size, self.embedding_dim * 2),
-                nn.LayerNorm(self.embedding_dim * 2),
+                nn.Linear(self.vision_hidden_size, hidden_dim),
+                nn.LayerNorm(hidden_dim),
                 nn.GELU(),
                 nn.Dropout(0.1),
-                nn.Linear(self.embedding_dim * 2, self.embedding_dim),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.LayerNorm(hidden_dim // 2),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(hidden_dim // 2, self.embedding_dim),
             ).to(self.device).float()
         else:
             self.projection_head = nn.Identity().to(self.device)
@@ -418,11 +424,18 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
 
         # Lazily initialize text projection if needed
         if self.text_projection is None:
-            # Text projection also uses float32
+            # Text projection also uses float32, matching vision projection structure
+            text_hidden_dim = max(self.embedding_dim * 4, 2048)
             self.text_projection = nn.Sequential(
-                nn.Linear(self.vision_hidden_size, self.embedding_dim),
-                nn.LayerNorm(self.embedding_dim),
-                nn.GELU()
+                nn.Linear(self.vision_hidden_size, text_hidden_dim),
+                nn.LayerNorm(text_hidden_dim),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(text_hidden_dim, text_hidden_dim // 2),
+                nn.LayerNorm(text_hidden_dim // 2),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(text_hidden_dim // 2, self.embedding_dim),
             ).to(self.device).float()
 
         # Move to correct device before projection

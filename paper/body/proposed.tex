@@ -1,96 +1,53 @@
 \section{본 론}
 
-\subsection{문제 정의}
-
-사용자 $i$의 프로필 이미지를 $x_i$라 하자. 각 이미지는 사전 학습된 비전-언어 모델(VLM) 기반의 인코더 $f_\theta$를 통해 고차원 특징 벡터로 변환된다.
-
-\subsection{데이터셋 구축}
-
-데이터셋 구축을 위해 Gemini-2.5-flash 모델에 이미지를 입력하고, 프롬프트 엔지니어링을 통해 표 \ref{tab:metadata}와 같은 구조화된 JSON 메타데이터를 자동으로 추출한다.
+사용자 $i$의 프로필 이미지를 $x_i$라 정의한다. 커플 쌍 $(x_f, x_m)$에 대해, 두 사용자의 임베딩 $e_f$, $e_m$이 임베딩 공간에서 가깝도록 학습하며, 비커플 쌍은 멀어지도록 대조 학습(Contrastive Learning)을 수행한다. 이를 위해 실제 데이팅 앱에서 상호 좋아요를 통해 매칭된 커플 775쌍의 프로필 이미지를 수집하였다. 각 커플 폴더에는 female.png와 male.png가 포함되어 있으며, 전체 데이터를 80/20 비율로 분할하여 표 \ref{tab:dataset}과 같이 Train+Valid(620쌍)와 Test(155쌍)로 구성하였다.
 
 \begin{table}[h]
 \centering
-\caption{메타데이터 스키마 및 속성}
-\label{tab:metadata}
-\begin{tabular}{|c|c|c|c|}
-\hline
-\textbf{속성명} & \textbf{타입} & \textbf{설명} & \textbf{클래스 수} \\
-\hline
-fashion\_style & Categorical & 패션 스타일 (학습 라벨) & 5 \\
-\hline
-shot\_type & Categorical & 촬영 타입 & 3 \\
-\hline
-visual\_quality & Categorical & 이미지 화질 & 3 \\
-\hline
-physical\_features & Text & 외형 특징 & - \\
-\hline
-caption & Text & 이미지 설명 & - \\
-\hline
+\caption{데이터셋 구성}
+\label{tab:dataset}
+\begin{tabular}{cc}
+\toprule
+\textbf{항목} & \textbf{값} \\
+\midrule
+총 커플 수 & 775쌍 \\
+Train+Valid & 620쌍 (80\%) \\
+Test (Hold-out) & 155쌍 (20\%) \\
+\bottomrule
 \end{tabular}
 \end{table}
 
-추출된 속성 중 fashion\_style은 Metric Learning의 클래스 라벨로 사용하며, visual\_quality가 Low인 샘플은 학습에서 제외하여 데이터의 노이즈를 최소화한다. 스타일 라벨 $y_i$는 정수 인덱스로 인코딩하여 $y_i \in \{0,1,...,C-1\}$로 표현한다.
-
-실제 서비스 단계에서는 데이팅 앱 서버가 모든 사용자의 스타일 임베딩을 사전에 계산하여 벡터 데이터베이스(Vector DB)에 인덱싱해 둔다. 추천 요청 시, 쿼리 사용자의 임베딩과 기존 사용자 임베딩 간의 코사인 유사도를 계산하여 상위 K명을 후보로 추출한다.
-
-\subsection{스타일 임베딩 구조}
+본 연구에서는 대규모 데이터로 사전 학습된 Qwen3-VL\cite{qwen2023}을 백본(Backbone)으로 사용한다. Qwen3-VL은 이미지와 텍스트를 함께 이해하는 비전-언어 모델(VLM)로, 다양한 시각적 태스크에서 뛰어난 일반화 성능을 보인다. 소규모 도메인 데이터에서의 과적합(Overfitting)을 방지하기 위해, 백본 네트워크의 약 20억 개 파라미터는 모두 동결(Freeze)한다. 그림 \ref{fig:architecture}는 제안하는 시스템의 전체 아키텍처를 나타낸다.
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.8\columnwidth]{figures/System_Concept.png}
-\caption{시스템 아키텍처: Qwen3-VL 백본과 Projection Head 구조}
-\label{fig:system}
+\includegraphics[width=0.95\columnwidth]{figures/system_architecture.png}
+\caption{제안 시스템 아키텍처: Qwen3-VL 백본(동결)과 학습 가능한 프로젝션 헤드를 결합하여 커플 매칭 임베딩을 학습한다.}
+\label{fig:architecture}
 \end{figure}
 
-본 연구에서는 대규모 데이터로 사전 학습된 Qwen3-VL\cite{qwen2023}을 백본(Backbone)으로 사용한다. 사용자 $i$의 프로필 이미지를 $x_i$, 해당 이미지의 스타일 라벨을 $y_i$라 하자. 여기서 $C$는 정의된 패션 스타일 클래스의 총 개수이다.
-
-소규모 도메인 데이터에서의 과적합(Overfitting)을 방지하고 일반화 성능을 유지하기 위해, 백본 네트워크의 파라미터는 모두 동결(Freeze)한다. 백본을 통과한 고차원 특징 벡터 $h_i$는 다음과 같다.
+백본을 통과한 고차원 특징 벡터 $h_i$는 식 (1)과 같다.
 
 \begin{equation}
-h_i = f_\theta(x_i)
+h_i = f_\theta(x_i) \in \mathbb{R}^{2048}
 \end{equation}
 
-스타일 매칭에 특화된 저차원 임베딩을 얻기 위해, 식 (1)의 벡터에 대해 학습 가능한 프로젝션 헤드(Projection Head) $g_\phi$를 추가한다. 프로젝션 헤드는 2개의 선형 계층(Linear Layer)과 Layer Normalization, 활성 함수로 구성된다.
+매칭 호환성 학습에 특화된 저차원 임베딩을 얻기 위해, 학습 가능한 프로젝션 헤드(Projection Head) $g_\phi$를 추가한다. 프로젝션 헤드는 2개의 선형 계층(2048$\rightarrow$1024$\rightarrow$256)과 Layer Normalization, GELU 활성 함수로 구성된다.
 
 \begin{equation}
 z_i = g_\phi(h_i) = W_2 \cdot \text{GELU}(\text{LN}(W_1 \cdot h_i))
 \end{equation}
 
-여기서, $W_1$, $W_2$는 학습 가능한 가중치 행렬, LN은 Layer Normalization, GELU는 활성 함수를 의미한다. 마지막 단계에서 L2 정규화(L2 Normalization)를 수행하여 모든 임베딩 벡터 $e_i$를 단위 초구(Unit Hypersphere) 상에 투영한다.
-
 \begin{equation}
-e_i = \frac{z_i}{\|z_i\|_2}
+e_i = \frac{z_i}{\|z_i\|_2} \in \mathbb{R}^{256}
 \end{equation}
 
-이를 통해 코사인 유사도와 유클리드 거리가 단조 관계를 가지게 되어, 학습 안정성을 높인다. 매칭 시 두 사용자 임베딩 $e_i$, $e_j$ 사이의 스타일 유사도는 다음과 같이 정의된다.
+L2 정규화를 통해 모든 임베딩 벡터를 단위 초구(Unit Hypersphere) 상에 투영하여, 코사인 유사도와 유클리드 거리가 단조 관계를 가지게 한다.
+
+실제 커플 쌍을 Positive, 배치 내 다른 사용자들을 Negative로 하여 대조 학습을 수행한다. CLIP\cite{radford2021}에서 검증된 InfoNCE Loss를 사용하며, 손실 함수는 식 (4)와 같다.
 
 \begin{equation}
-\text{sim}(e_i, e_j) = e_i^T \cdot e_j
+\mathcal{L} = -\log\frac{\exp(\text{sim}(e_f, e_m)/\tau)}{\sum_{j=1}^{N} \exp(\text{sim}(e_f, e_{m_j})/\tau)}
 \end{equation}
 
-\subsection{Triplet 기반 Metric Learning}
-
-동일한 스타일을 가진 사용자는 임베딩 공간에서 가깝게, 서로 다른 스타일의 사용자는 멀리 위치하도록 학습하기 위해 Triplet Margin Loss\cite{schroff2015}를 사용한다.
-
-\begin{figure}[h]
-\centering
-\includegraphics[width=0.7\columnwidth]{figures/Triplet_Loss_Concept.png}
-\caption{Triplet Loss 개념: Anchor(빨강), Positive(초록), Negative(파랑) 관계}
-\label{fig:triplet}
-\end{figure}
-
-기준이 되는 Anchor($a$), 동일한 스타일의 Positive($p$), 다른 스타일의 Negative($n$) 임베딩에 대한 손실 함수는 다음과 같다.
-
-\begin{equation}
-\mathcal{L}_{\text{triplet}} = \max(d(e_a, e_p) - d(e_a, e_n) + \alpha, 0)
-\end{equation}
-
-여기서 $d$는 유클리드 거리이며, $\alpha$는 마진(Margin) 하이퍼파라미터이다. 이때 $y_a = y_p$ (동일 클래스)이며, $y_a \neq y_n$ (타 클래스) 조건을 만족한다.
-
-학습 효율을 극대화하기 위해, 미니배치 내에서 적절한 난이도의 샘플을 실시간으로 선택하는 Online Semi-hard Mining\cite{hermans2017}을 적용한다. Semi-hard Negative는 마진 경계 내에 위치한 샘플($d(a,p) < d(a,n) < d(a,p) + \alpha$)로, 너무 쉽지도 어렵지도 않아 학습 안정성과 수렴 속도 간의 균형을 제공한다.
-
-\subsection{PK Sampler 기반 배치 구성}
-
-Online Semi-hard Mining이 안정적으로 동작하기 위해서는 미니배치 내부에 유효한 Triplet을 구성할 수 있는 충분한 수의 Positive 샘플이 존재해야 한다. 이를 보장하기 위해 본 연구에서는 PK Sampler를 사용하여 배치를 구성한다.
-
-PK Sampler는 각 미니배치에서 $P$개의 스타일 클래스를 무작위로 선택하고, 선택된 각 클래스 당 $K$개의 이미지를 샘플링하여 총 $P \times K$ 크기의 배치를 구성한다. 이 방식은 각 Anchor에 대해 최소 $(K-1)$개의 Positive 후보를 보장하므로, Hard Positive 마이닝이 항상 가능해진다.
+여기서 $\tau$는 temperature 하이퍼파라미터이며, $\text{sim}$은 코사인 유사도, $N$은 배치 크기를 나타낸다. Temperature가 낮을수록 유사도 분포가 뾰족(sharp)해지고, 높을수록 부드러워진다. 본 연구에서는 실험을 통해 $\tau=0.1$이 최적임을 확인하였다. 또한 학습 효율을 높이기 위해 Semi-Hard Negative Mining을 적용하여, 너무 쉽거나 어렵지 않은 적절한 난이도의 네거티브 샘플을 선택함으로써 학습 안정성과 수렴 속도 간의 균형을 확보하였다.

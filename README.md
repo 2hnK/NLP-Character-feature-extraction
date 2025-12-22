@@ -55,9 +55,16 @@ Female Image                          Male Image
      ▼                                     ▼
   [256-dim]                            [256-dim]
      │                                     │
-     └──────────────┬──────────────────────┘
-                    ▼
-             InfoNCE Loss
+     └──── L2 Normalize ───────────────────┘
+                   │
+                   ▼
+        ┌───────────────────┐
+        │ Cosine Similarity │
+        │     (τ = 0.1)     │
+        └───────────────────┘
+                   │
+                   ▼
+           InfoNCE Loss
 ```
 
 자세한 모델 구조는 [기술 문서](docs/model_architecture.md)를 참조하세요.

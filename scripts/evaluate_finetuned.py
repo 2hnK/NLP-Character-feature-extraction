@@ -1,15 +1,16 @@
 """
-커플 데이터 기반 Recall@K 평가 스크립트 (로컬 버전)
+학습된 모델 커플 매칭 평가 스크립트
 
-실제 매칭된 커플 데이터(774쌍)를 사용하여:
-1. 각 사용자의 임베딩 추출
-2. Female → Male 검색 시 파트너가 Top-K에 있는지 평가
-3. Male → Female 검색 시 파트너가 Top-K에 있는지 평가
-4. Recall@K, MRR, Hit Rate 등 지표 계산
+학습된 Qwen3-VL + Gender-specific Projection Head 모델의 성능을 평가합니다.
 
-SageMaker JupyterLab 로컬 경로:
-- 체크포인트: ~/checkpoints/best_model_epoch3.pth
-- 커플 데이터: ~/data/mutual-like-validations/images/couple_{5-778}/
+측정 지표:
+- Hit@K (K=5, 10, 20, 50)
+- MRR (Mean Reciprocal Rank)
+- Accuracy
+
+사용법:
+    python scripts/evaluate_finetuned.py
+    python scripts/evaluate_finetuned.py --checkpoint ./best_model.pth --pooling-mode eos
 """
 
 import os
@@ -32,7 +33,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.models.qwen_backbone import Qwen3VLFeatureExtractor
-from src.models.projection import ProjectionHead
+from src.models.projection import GenderSpecificProjection
 
 # 로깅 설정
 logging.basicConfig(
@@ -45,29 +46,25 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 @dataclass
 class CoupleEvalConfig:
-    """커플 평가 설정"""
-    # 로컬 경로 (SageMaker JupyterLab)
-    couple_data_dir: str = os.path.expanduser("~/data/mutual-like-validations/images")
-    checkpoint_path: str = os.path.expanduser("~/checkpoints/best_model_epoch3.pth")
-    splits_file: str = "couple_splits.json"  # 분할 파일 경로
-    
-    # 커플 범위 (splits 미사용 시)
-    start_couple: int = 5
-    end_couple: int = 778
+    """학습된 모델 평가 설정"""
+    # 데이터
+    data_dir: str = os.path.expanduser("~/data/mutual-like-validations/images")
+    checkpoint_path: str = "./couple_matching_checkpoints/best_model.pth"
     
     # 모델 설정 (학습 시와 동일)
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
     embedding_dim: int = 2048
     projection_hidden_dim: int = 1024
     projection_output_dim: int = 256
+    pooling_mode: str = "mean"  # 'mean' or 'eos'
     
     # 평가 설정
     batch_size: int = 1  # 메모리 안전
     image_size: int = 768
-    k_values: List[int] = field(default_factory=lambda: [1, 5, 10, 20, 50])
+    k_values: List[int] = field(default_factory=lambda: [5, 10, 20, 50])
     
     # 출력
-    output_dir: str = "./couple_evaluation_results"
+    output_dir: str = "./finetuned_evaluation_results"
 
 
 class ResizeLongestEdge:
@@ -87,8 +84,13 @@ class ResizeLongestEdge:
 
 
 def load_model(checkpoint_path: str, config: CoupleEvalConfig, device: str):
-    """모델 및 체크포인트 로드"""
-    logger.info(f"Loading model: {config.model_name}")
+    """모델 및 체크포인트 로드
+    
+    구조:
+    - Backbone: Qwen3-VL (Mean Pooling or EOS)
+    - Projection: 성별별 독립 헤드 (Female/Male)
+    """
+    logger.info(f"Loading model: {config.model_name} (pooling: {config.pooling_mode})")
     
     # Backbone 로드
     backbone = Qwen3VLFeatureExtractor(
@@ -96,11 +98,12 @@ def load_model(checkpoint_path: str, config: CoupleEvalConfig, device: str):
         embedding_dim=config.embedding_dim,
         freeze_vision_encoder=True,
         use_projection_head=False,
+        pooling_mode=config.pooling_mode,
         device=device
     )
     
-    # Projection Head 로드
-    projection_head = ProjectionHead(
+    # 성별별 Projection Head 로드
+    projection = GenderSpecificProjection(
         input_dim=config.embedding_dim,
         hidden_dim=config.projection_hidden_dim,
         output_dim=config.projection_output_dim
@@ -112,85 +115,86 @@ def load_model(checkpoint_path: str, config: CoupleEvalConfig, device: str):
     
     # State dict 로드
     backbone.load_state_dict(checkpoint['backbone_state_dict'], strict=False)
-    projection_head.load_state_dict(checkpoint['projection_head_state_dict'])
+    projection.load_state_dict(checkpoint['projection_state_dict'])
     
     backbone.eval()
-    projection_head.eval()
+    projection.eval()
     
     logger.info(f"Checkpoint loaded (epoch {checkpoint.get('epoch', 'N/A')})")
+    logger.info("✅ Gender-specific projection heads loaded (Female/Male)")
     
-    return backbone, projection_head
+    return backbone, projection
 
 
 def load_couple_images(
-    config: CoupleEvalConfig
+    couple_ids: List[int], data_dir: str, image_size: int = 768
 ) -> Tuple[List[Tuple[int, Image.Image, Image.Image]], List[int]]:
-    """로컬에서 커플 이미지 로드"""
-    transform = ResizeLongestEdge(max_size=config.image_size)
+    """커플 이미지 로드"""
+    transform = ResizeLongestEdge(max_size=image_size)
     couples = []
     skipped = []
     
-    data_dir = Path(config.couple_data_dir)
-    logger.info(f"Loading couple images from: {data_dir}")
+    data_path = Path(data_dir)
     
-    for couple_num in tqdm(
-        range(config.start_couple, config.end_couple + 1), 
-        desc="Loading couples"
-    ):
+    for couple_num in tqdm(couple_ids, desc="이미지 로드"):
         try:
-            couple_dir = data_dir / f"couple_{couple_num}"
+            couple_dir = data_path / f"couple_{couple_num}"
             female_path = couple_dir / "female.png"
             male_path = couple_dir / "male.png"
             
-            # 파일 존재 확인
             if not female_path.exists() or not male_path.exists():
-                logger.warning(f"Skipping couple_{couple_num}: files not found")
                 skipped.append(couple_num)
                 continue
             
-            # Female 이미지 로드
             female_img = Image.open(female_path).convert('RGB')
             female_img = transform(female_img)
             
-            # Male 이미지 로드
             male_img = Image.open(male_path).convert('RGB')
             male_img = transform(male_img)
             
             couples.append((couple_num, female_img, male_img))
             
         except Exception as e:
-            logger.warning(f"Skipping couple_{couple_num}: {e}")
+            logger.warning(f"스킵 couple_{couple_num}: {e}")
             skipped.append(couple_num)
     
-    logger.info(f"Loaded {len(couples)} couples, skipped {len(skipped)}")
+    logger.info(f"로드: {len(couples)}개, 스킵: {len(skipped)}개")
     
     return couples, skipped
 
 
 def extract_embeddings(
     backbone: Qwen3VLFeatureExtractor,
-    projection_head: ProjectionHead,
+    projection: GenderSpecificProjection,
     couples: List[Tuple[int, Image.Image, Image.Image]],
     device: str
 ) -> Tuple[np.ndarray, np.ndarray, List[int]]:
-    """커플 이미지에서 임베딩 추출"""
+    """
+    커플 이미지에서 임베딩 추출
+    
+    구조:
+    - Female: Backbone → Female Projection Head → Female Embedding
+    - Male: Backbone → Male Projection Head → Male Embedding
+    """
     female_embeddings = []
     male_embeddings = []
     couple_ids = []
     
-    logger.info("Extracting embeddings...")
+    logger.info("Extracting embeddings (gender-specific projection)...")
     
     with torch.no_grad():
         for couple_num, female_img, male_img in tqdm(couples, desc="Extracting"):
             try:
-                # Female 임베딩
+                # Backbone forward
                 female_feat = backbone.forward([female_img])
-                female_emb = projection_head(female_feat)
-                female_emb = F.normalize(female_emb, p=2, dim=1)
-                
-                # Male 임베딩
                 male_feat = backbone.forward([male_img])
-                male_emb = projection_head(male_feat)
+                
+                # 성별별 Projection Head 사용
+                female_emb = projection.forward_female(female_feat)
+                male_emb = projection.forward_male(male_feat)
+                
+                # L2 정규화 (GenderSpecificProjection 내부에서 이미 수행되지만 명시적으로 추가)
+                female_emb = F.normalize(female_emb, p=2, dim=1)
                 male_emb = F.normalize(male_emb, p=2, dim=1)
                 
                 female_embeddings.append(female_emb.cpu().numpy())
@@ -386,82 +390,67 @@ def save_results(metrics: Dict, output_dir: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate model on couple data (local)")
-    parser.add_argument("--data-dir", type=str, default=None, 
-                        help="Couple data directory")
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Checkpoint path")
-    parser.add_argument("--splits-file", type=str, default=None,
-                        help="Splits JSON file (from prepare_couple_splits.py)")
-    parser.add_argument("--split", type=str, default=None, choices=['test', 'all'],
-                        help="Which split to evaluate: 'test' or 'all'")
-    parser.add_argument("--start", type=int, default=5, 
-                        help="Start couple number (ignored if --splits-file used)")
-    parser.add_argument("--end", type=int, default=778, 
-                        help="End couple number (ignored if --splits-file used)")
+    parser = argparse.ArgumentParser(description="학습된 모델 평가")
+    parser.add_argument("--data-dir", type=str, 
+                        default=os.path.expanduser("~/data/mutual-like-validations/images"))
+    parser.add_argument("--splits", type=str, default="couple_splits.json",
+                        help="분할 JSON 파일")
+    parser.add_argument("--checkpoint", type=str, 
+                        default="./couple_matching_checkpoints/best_model.pth")
+    parser.add_argument("--pooling-mode", type=str, default="mean", choices=["mean", "eos"])
+    parser.add_argument("--output-dir", type=str, default="./finetuned_evaluation_results")
     args = parser.parse_args()
     
     config = CoupleEvalConfig()
-    
-    # 명령줄 인자로 덮어쓰기
-    if args.data_dir:
-        config.couple_data_dir = args.data_dir
-    if args.checkpoint:
-        config.checkpoint_path = args.checkpoint
-    if args.splits_file:
-        config.splits_file = args.splits_file
-    
-    # 커플 ID 결정
-    couple_ids_to_eval = None
-    if args.split and os.path.exists(config.splits_file):
-        with open(config.splits_file, 'r') as f:
-            splits = json.load(f)
-        if args.split == 'test':
-            couple_ids_to_eval = splits['test']
-            logger.info(f"Evaluating TEST set: {len(couple_ids_to_eval)} couples")
-        elif args.split == 'all':
-            couple_ids_to_eval = None  # 전체 평가
-    
-    config.start_couple = args.start
-    config.end_couple = args.end
+    config.data_dir = args.data_dir
+    config.checkpoint_path = args.checkpoint
+    config.pooling_mode = args.pooling_mode
+    config.output_dir = args.output_dir
     
     # 경로 확인
     if not Path(config.checkpoint_path).exists():
-        logger.error(f"Checkpoint not found: {config.checkpoint_path}")
-        return 1
-    if not Path(config.couple_data_dir).exists():
-        logger.error(f"Data directory not found: {config.couple_data_dir}")
+        logger.error(f"체크포인트 없음: {config.checkpoint_path}")
         return 1
     
-    # 디바이스 설정
+    if not os.path.exists(args.splits):
+        logger.error(f"분할 파일 없음: {args.splits}")
+        return 1
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using device: {device}")
+    logger.info(f"디바이스: {device}")
     
-    # 1. 모델 로드
-    backbone, projection_head = load_model(config.checkpoint_path, config, device)
+    # 분할 파일에서 test set 로드
+    with open(args.splits, 'r') as f:
+        splits = json.load(f)
     
-    # 2. 커플 이미지 로드 (로컬)
-    couples, skipped = load_couple_images(config)
+    test_ids = splits['test']
+    logger.info(f"Test set: {len(test_ids)}개")
+    
+    # 모델 로드
+    backbone, projection = load_model(config.checkpoint_path, config, device)
+    
+    # 이미지 로드
+    couples, skipped = load_couple_images(test_ids, config.data_dir, config.image_size)
     
     if not couples:
-        logger.error("No couples loaded. Exiting.")
+        logger.error("데이터 없음")
         return 1
     
-    # 3. 임베딩 추출
+    # 임베딩 추출
     female_embs, male_embs, couple_ids = extract_embeddings(
-        backbone, projection_head, couples, device
+        backbone, projection, couples, device
     )
     
-    # 4. 지표 계산
+    # 지표 계산
     metrics = compute_couple_metrics(female_embs, male_embs, config.k_values)
     metrics["skipped_couples"] = skipped
     metrics["couple_ids"] = couple_ids
     
-    # 5. 결과 출력 및 저장
+    # 결과 출력/저장
     print_results(metrics)
     save_results(metrics, config.output_dir)
     
-    print(f"\n✅ 결과가 저장되었습니다: {config.output_dir}")
+    print(f"\n✅ 저장됨: {config.output_dir}")
     
     return 0
 

@@ -1,13 +1,15 @@
 """
-커플 매칭 예측 모델 학습 스크립트
+커플 매칭 모델 학습 스크립트
 
-InfoNCE Loss + Semi-Hard Negative Mining을 사용하여
-실제 커플 쌍을 가깝게, 비커플 쌍을 멀게 학습합니다.
+구조:
+  - Backbone: Qwen3-VL (동결)
+  - Projection: 성별별 독립 헤드 (Female/Male)
+  - Loss: InfoNCE (양방향)
 
 사용법:
-    python scripts/train_couple_matching.py --fold 0
-    python scripts/train_couple_matching.py --fold 1
-    ...
+    python scripts/prepare_splits.py  # 먼저 분할 파일 생성
+    python scripts/train_couple_matching.py
+    python scripts/train_couple_matching.py --splits couple_splits.json --epochs 50
 """
 
 import os
@@ -17,8 +19,7 @@ import logging
 import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
-from io import BytesIO
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -30,18 +31,13 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
-# 프로젝트 루트 추가
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.models.qwen_backbone import Qwen3VLFeatureExtractor
-from src.models.projection import ProjectionHead
+from src.models.projection import GenderSpecificProjection
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -55,31 +51,27 @@ class TrainConfig:
     
     # 체크포인트
     checkpoint_dir: str = "./couple_matching_checkpoints"
-    pretrained_checkpoint: Optional[str] = None  # 새 모델에서 시작
+    pretrained_checkpoint: Optional[str] = None
     
-    # 모델 설정
+    # 모델
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
     embedding_dim: int = 2048
     projection_hidden_dim: int = 1024
     projection_output_dim: int = 256
     
-    # 학습 하이퍼파라미터
-    batch_size: int = 48  # InfoNCE에 유리한 큰 배치
-    learning_rate: float = 5e-5  # 1e-4 -> 5e-5 (천천히 학습)
-    weight_decay: float = 1e-3   # 1e-4 -> 1e-3 (규제 강화)
+    # 학습 파라미터
+    batch_size: int = 48
+    learning_rate: float = 5e-5
+    weight_decay: float = 1e-3
     epochs: int = 30
-    temperature: float = 0.1  # 0.07(sharp) -> 0.1(smoother) 일반화 실험
-    
-    # 스케줄러
+    temperature: float = 0.1
     warmup_epochs: int = 2
-    
-    # Early stopping
-    patience: int = 10  # 5 -> 10으로 완화 (Loss가 줄어들면 더 기다림)
+    patience: int = 10
     
     # 이미지
     image_size: int = 768
     
-    # Mixed precision
+    # AMP
     use_amp: bool = True
 
 
@@ -200,7 +192,12 @@ class InfoNCELoss(nn.Module):
 
 
 def load_model(config: TrainConfig, device: str):
-    """모델 로드"""
+    """모델 로드
+    
+    구조:
+    - Backbone: Qwen3-VL (동결)
+    - Projection: 성별별 독립 헤드 (Female/Male)
+    """
     logger.info(f"Loading model: {config.model_name}")
     
     # Backbone 로드 (동결)
@@ -212,52 +209,126 @@ def load_model(config: TrainConfig, device: str):
         device=device
     )
     
-    # Projection Head
-    projection_head = ProjectionHead(
+    # 성별별 Projection Head
+    projection = GenderSpecificProjection(
         input_dim=config.embedding_dim,
         hidden_dim=config.projection_hidden_dim,
         output_dim=config.projection_output_dim
     ).to(device)
+    
+    logger.info("✅ Gender-specific projection heads initialized (Female/Male)")
     
     # 사전학습된 가중치 로드 (선택적)
     if config.pretrained_checkpoint and os.path.exists(config.pretrained_checkpoint):
         logger.info(f"Loading pretrained checkpoint: {config.pretrained_checkpoint}")
         checkpoint = torch.load(config.pretrained_checkpoint, map_location=device)
         backbone.load_state_dict(checkpoint['backbone_state_dict'], strict=False)
-        projection_head.load_state_dict(checkpoint['projection_head_state_dict'])
+        projection.load_state_dict(checkpoint['projection_state_dict'])
     
-    return backbone, projection_head
+    return backbone, projection
 
 
-def compute_recall_at_k(female_embs, male_embs, k_values=[1, 5, 10]):
-    """Validation set에서 Recall@K 계산"""
+def compute_metrics(female_embs, male_embs, k_values=[5, 10, 20, 50]):
+    """
+    Validation set에서 평가 지표 계산
+    
+    측정 지표:
+    - Hit@K (K=5,10,20,50): 정답이 Top-K에 포함되면 1, 아니면 0
+    - Recall@K (K=5,10,20,50): Hit@K와 동일 (정답이 1개일 때)
+    - MRR (Mean Reciprocal Rank): 정답 순위의 역수 평균
+    - Accuracy: 정답이 1위인 비율 (Hit@1)
+    
+    평가 방법:
+    - 유사도 행렬 (N x N) 계산: similarity[i, j] = female_i · male_j
+    - Female→Male: 각 여성에 대해 모든 남성 중 정답 파트너의 순위 계산
+    - Male→Female: 각 남성에 대해 모든 여성 중 정답 파트너의 순위 계산
+    
+    Args:
+        female_embs: (N, D) 정규화된 female 임베딩
+        male_embs: (N, D) 정규화된 male 임베딩
+        k_values: 계산할 K 값 리스트 (기본: [5, 10, 20, 50])
+        
+    Returns:
+        results: 양방향 평균 지표
+    """
     n = len(female_embs)
+    
+    # 유사도 행렬: (N, N)
+    # similarity[i, j] = i번째 female과 j번째 male 간의 코사인 유사도
     similarity = np.dot(female_embs, male_embs.T)
     
     results = {}
     
-    # Female → Male
+    # === Female → Male 방향 ===
+    # 각 female i에 대해, 모든 male 중 정답 male i가 몇 위인지 계산
     ranks_f2m = []
     for i in range(n):
-        sorted_idx = np.argsort(-similarity[i])
-        rank = np.where(sorted_idx == i)[0][0]
+        scores = similarity[i]  # i번째 female의 모든 male에 대한 유사도
+        sorted_idx = np.argsort(-scores)  # 유사도 높은 순 정렬
+        rank = np.where(sorted_idx == i)[0][0]  # 정답(i번째 male)의 순위
         ranks_f2m.append(rank)
     ranks_f2m = np.array(ranks_f2m)
     
-    for k in k_values:
-        results[f'recall@{k}'] = np.mean(ranks_f2m < k)
+    # === Male → Female 방향 ===
+    # 각 male i에 대해, 모든 female 중 정답 female i가 몇 위인지 계산
+    ranks_m2f = []
+    for i in range(n):
+        scores = similarity[:, i]  # i번째 male에 대한 모든 female의 유사도
+        sorted_idx = np.argsort(-scores)  # 유사도 높은 순 정렬
+        rank = np.where(sorted_idx == i)[0][0]  # 정답(i번째 female)의 순위
+        ranks_m2f.append(rank)
+    ranks_m2f = np.array(ranks_m2f)
     
-    results['mrr'] = np.mean(1.0 / (ranks_f2m + 1))
+    # === Accuracy (Hit@1) ===
+    # 정답이 1위인 비율
+    acc_f2m = np.mean(ranks_f2m == 0)
+    acc_m2f = np.mean(ranks_m2f == 0)
+    results['accuracy'] = (acc_f2m + acc_m2f) / 2
+    results['f2m_accuracy'] = acc_f2m
+    results['m2f_accuracy'] = acc_m2f
+    
+    # === Hit@K / Recall@K (양방향 평균) ===
+    # 정답이 1개일 때 Hit@K = Recall@K
+    for k in k_values:
+        hit_f2m = np.mean(ranks_f2m < k)
+        hit_m2f = np.mean(ranks_m2f < k)
+        
+        # Hit@K
+        results[f'hit@{k}'] = (hit_f2m + hit_m2f) / 2
+        results[f'f2m_hit@{k}'] = hit_f2m
+        results[f'm2f_hit@{k}'] = hit_m2f
+        
+        # Recall@K (Hit@K와 동일, 호환성 위해 둘 다 저장)
+        results[f'recall@{k}'] = results[f'hit@{k}']
+        results[f'f2m_recall@{k}'] = hit_f2m
+        results[f'm2f_recall@{k}'] = hit_m2f
+    
+    # === MRR (Mean Reciprocal Rank) ===
+    mrr_f2m = np.mean(1.0 / (ranks_f2m + 1))
+    mrr_m2f = np.mean(1.0 / (ranks_m2f + 1))
+    results['mrr'] = (mrr_f2m + mrr_m2f) / 2
+    results['f2m_mrr'] = mrr_f2m
+    results['m2f_mrr'] = mrr_m2f
+    
+    # === 추가 통계 ===
+    results['mean_rank'] = (np.mean(ranks_f2m) + np.mean(ranks_m2f)) / 2
+    results['median_rank'] = (np.median(ranks_f2m) + np.median(ranks_m2f)) / 2
     
     return results
 
 
 def train_one_epoch(
-    backbone, projection_head, dataloader, optimizer, criterion,
+    backbone, projection, dataloader, optimizer, criterion,
     scaler, device, config, epoch
 ):
-    """한 에폭 학습"""
-    projection_head.train()
+    """
+    한 에폭 학습
+    
+    구조:
+    - 여성 이미지 → 여성 프롬프트 → Backbone → Female Projection Head
+    - 남성 이미지 → 남성 프롬프트 → Backbone → Male Projection Head
+    """
+    projection.train()
     backbone.eval()  # Backbone은 항상 eval (동결)
     
     total_loss = 0
@@ -272,13 +343,13 @@ def train_one_epoch(
         optimizer.zero_grad()
         
         with autocast('cuda', enabled=config.use_amp):
-            # Forward pass
+            # Forward pass (Backbone은 gradient 계산 안 함)
             with torch.no_grad():
                 female_features = backbone.forward(female_imgs)
                 male_features = backbone.forward(male_imgs)
             
-            female_embs = projection_head(female_features)
-            male_embs = projection_head(male_features)
+            # 성별별 Projection Head 사용
+            female_embs, male_embs = projection(female_features, male_features)
             
             # Loss 계산
             loss = criterion(female_embs, male_embs)
@@ -305,9 +376,9 @@ def train_one_epoch(
 
 
 @torch.no_grad()
-def validate(backbone, projection_head, dataloader, criterion, device, config):
+def validate(backbone, projection, dataloader, criterion, device, config):
     """검증"""
-    projection_head.eval()
+    projection.eval()
     backbone.eval()
     
     total_loss = 0
@@ -323,8 +394,8 @@ def validate(backbone, projection_head, dataloader, criterion, device, config):
             female_features = backbone.forward(female_imgs)
             male_features = backbone.forward(male_imgs)
             
-            female_embs = projection_head(female_features)
-            male_embs = projection_head(male_features)
+            # 성별별 Projection Head 사용
+            female_embs, male_embs = projection(female_features, male_features)
             
             loss = criterion(female_embs, male_embs)
         
@@ -334,51 +405,58 @@ def validate(backbone, projection_head, dataloader, criterion, device, config):
         all_female_embs.append(female_embs.cpu().numpy())
         all_male_embs.append(male_embs.cpu().numpy())
     
-    # Recall 계산
+    # 평가 지표 계산
     all_female_embs = np.vstack(all_female_embs)
     all_male_embs = np.vstack(all_male_embs)
-    recall_metrics = compute_recall_at_k(all_female_embs, all_male_embs)
+    metrics = compute_metrics(all_female_embs, all_male_embs)
     
-    return total_loss / num_batches, recall_metrics
+    return total_loss / num_batches, metrics
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train couple matching model")
-    parser.add_argument("--fold", type=int, required=True, help="Fold number (0-4)")
-    parser.add_argument("--batch-size", type=int, default=48, help="Batch size")
-    parser.add_argument("--epochs", type=int, default=30, help="Number of epochs")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
+    parser = argparse.ArgumentParser(description="커플 매칭 모델 학습")
+    parser.add_argument("--data-dir", type=str, 
+                        default=os.path.expanduser("~/data/mutual-like-validations/images"))
+    parser.add_argument("--splits", type=str, default="couple_splits.json",
+                        help="분할 JSON 파일 (prepare_splits.py로 생성)")
+    parser.add_argument("--batch-size", type=int, default=48)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Pretrained checkpoint to load (optional)")
+                        help="사전학습 체크포인트 경로")
     args = parser.parse_args()
     
     config = TrainConfig()
+    config.data_dir = args.data_dir
+    config.splits_file = args.splits
     config.batch_size = args.batch_size
     config.epochs = args.epochs
     config.learning_rate = args.lr
     
-    # 체크포인트 옵션
     if args.checkpoint:
         config.pretrained_checkpoint = args.checkpoint
-        logger.info(f"📥 Loading checkpoint: {args.checkpoint}")
+        logger.info(f"📥 체크포인트 로드: {args.checkpoint}")
     else:
-        logger.info("🆕 Training from scratch (no pretrained weights)")
+        logger.info("🆕 새로운 학습 시작")
     
-    # 디바이스
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using device: {device}")
+    logger.info(f"디바이스: {device}")
     
-    # 분할 데이터 로드
+    # 분할 파일 로드
+    if not os.path.exists(config.splits_file):
+        logger.error(f"분할 파일 없음: {config.splits_file}")
+        logger.error("python scripts/prepare_splits.py 실행 필요")
+        return 1
+    
     with open(config.splits_file, 'r') as f:
         splits = json.load(f)
     
-    fold_data = splits['folds'][args.fold]
-    train_ids = fold_data['train']
-    valid_ids = fold_data['valid']
+    train_ids = splits['train']
+    valid_ids = splits['valid']
     
-    logger.info(f"Fold {args.fold}: Train {len(train_ids)}, Valid {len(valid_ids)}")
+    logger.info(f"Train: {len(train_ids)}, Valid: {len(valid_ids)}")
     
-    # 데이터셋/로더
+    # 데이터셋
     train_dataset = CoupleDataset(train_ids, config.data_dir, config.image_size)
     valid_dataset = CoupleDataset(valid_ids, config.data_dir, config.image_size)
     
@@ -394,78 +472,66 @@ def main():
     )
     
     # 모델
-    backbone, projection_head = load_model(config, device)
+    backbone, projection = load_model(config, device)
     
-    # Loss, Optimizer, Scheduler
+    # 학습 설정
     criterion = InfoNCELoss(temperature=config.temperature)
     optimizer = torch.optim.AdamW(
-        projection_head.parameters(),
+        projection.parameters(),
         lr=config.learning_rate,
         weight_decay=config.weight_decay
     )
     scheduler = CosineAnnealingLR(optimizer, T_max=config.epochs)
     scaler = GradScaler('cuda', enabled=config.use_amp)
     
-    # 체크포인트 디렉토리
     os.makedirs(config.checkpoint_dir, exist_ok=True)
     
     # 학습 루프
-    best_recall = 0
+    best_acc = 0
     patience_counter = 0
     
     for epoch in range(1, config.epochs + 1):
-        # Train
         train_loss = train_one_epoch(
-            backbone, projection_head, train_loader, optimizer, criterion,
+            backbone, projection, train_loader, optimizer, criterion,
             scaler, device, config, epoch
         )
         
-        # Validate
-        valid_loss, recall_metrics = validate(
-            backbone, projection_head, valid_loader, criterion, device, config
+        valid_loss, metrics = validate(
+            backbone, projection, valid_loader, criterion, device, config
         )
         
         scheduler.step()
         
-        # 로깅
         logger.info(
-            f"Epoch {epoch}: Train Loss={train_loss:.4f}, "
-            f"Valid Loss={valid_loss:.4f}, "
-            f"R@1={recall_metrics['recall@1']*100:.2f}%, "
-            f"R@5={recall_metrics['recall@5']*100:.2f}%, "
-            f"MRR={recall_metrics['mrr']:.4f}"
+            f"Epoch {epoch}: Train={train_loss:.4f}, Valid={valid_loss:.4f}, "
+            f"Acc={metrics['accuracy']*100:.2f}%, H@10={metrics['hit@10']*100:.2f}%, MRR={metrics['mrr']:.4f}"
         )
         
-        # Best model 저장
-        current_recall = recall_metrics['recall@1']
-        if current_recall > best_recall:
-            best_recall = current_recall
+        # Best 저장
+        if metrics['accuracy'] > best_acc:
+            best_acc = metrics['accuracy']
             patience_counter = 0
             
-            checkpoint_path = os.path.join(
-                config.checkpoint_dir, f"best_model_fold{args.fold}.pth"
-            )
+            checkpoint_path = os.path.join(config.checkpoint_dir, "best_model.pth")
             torch.save({
                 'epoch': epoch,
-                'fold': args.fold,
                 'backbone_state_dict': backbone.state_dict(),
-                'projection_head_state_dict': projection_head.state_dict(),
+                'projection_state_dict': projection.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'best_recall': best_recall,
-                'metrics': recall_metrics,
+                'best_accuracy': best_acc,
+                'metrics': metrics,
                 'config': config.__dict__
             }, checkpoint_path)
-            logger.info(f"✅ Best model saved: R@1={best_recall*100:.2f}%")
+            logger.info(f"✅ Best 저장: Acc={best_acc*100:.2f}%")
         else:
             patience_counter += 1
             if patience_counter >= config.patience:
-                logger.info(f"Early stopping at epoch {epoch}")
+                logger.info(f"Early stopping (epoch {epoch})")
                 break
     
-    print("\n" + "=" * 60)
-    print(f"🏆 Fold {args.fold} 완료!")
-    print(f"Best Recall@1: {best_recall*100:.2f}%")
-    print("=" * 60)
+    print(f"\n{'='*50}")
+    print(f"🏆 학습 완료! Best Accuracy: {best_acc*100:.2f}%")
+    print(f"{'='*50}")
     
     return 0
 

@@ -5,14 +5,13 @@ Qwen3-VL 베이스라인 모델 평가 스크립트
 학습된 모델과 비교하기 위한 베이스라인 성능을 제공합니다.
 
 측정 지표:
-- Recall@1, @5, @10, @20, @50
+- Hit@K (K=5, 10, 20, 50)
 - MRR (Mean Reciprocal Rank)
+- Accuracy
 
 사용법:
-    python scripts/evaluate_baseline.py --fold 0
-    python scripts/evaluate_baseline.py --test-ids 1,2,3,4,5
-
-작성: 2024-12-21
+    python scripts/evaluate_baseline.py
+    python scripts/evaluate_baseline.py --data-dir /path/to/data --pooling-mode eos
 """
 
 import os
@@ -20,9 +19,9 @@ import sys
 import json
 import logging
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import torch
 import torch.nn.functional as F
@@ -47,18 +46,22 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 @dataclass
 class EvalConfig:
-    """평가 설정"""
+    """베이스라인 평가 설정"""
     # 데이터
     data_dir: str = os.path.expanduser("~/data/mutual-like-validations/images")
-    splits_file: str = "couple_splits.json"
     
     # 모델 설정
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
     embedding_dim: int = 2048  # Qwen3-VL hidden dimension
+    pooling_mode: str = "mean"  # 'mean' or 'eos'
     
-    # 평가 하이퍼파라미터
-    batch_size: int = 48
+    # 평가 설정
+    batch_size: int = 16
     image_size: int = 768
+    k_values: List[int] = field(default_factory=lambda: [5, 10, 20, 50])
+    
+    # 출력
+    output_dir: str = "./baseline_evaluation_results"
 
 
 class ResizeLongestEdge:
@@ -78,7 +81,7 @@ class ResizeLongestEdge:
 
 
 class CoupleDataset:
-    """커플 데이터셋 (손상된 이미지 자동 필터링)"""
+    """커플 데이터셋"""
     def __init__(self, couple_ids: List[int], data_dir: str, image_size: int = 768):
         self.data_dir = Path(data_dir)
         self.transform = ResizeLongestEdge(max_size=image_size)
@@ -245,143 +248,109 @@ def evaluate_baseline(backbone, dataset: CoupleDataset, device: str,
     return metrics
 
 
-def print_results(metrics: dict, n_couples: int, fold: Optional[int] = None):
+def print_results(metrics: dict, n_couples: int):
     """결과 출력"""
     print("\n" + "=" * 50)
     print("   Qwen3-VL 베이스라인 평가 결과")
     print("=" * 50)
     
-    dataset_info = f"Fold {fold} test set" if fold is not None else "Custom test set"
-    print(f"데이터: {n_couples} couples ({dataset_info})")
+    print(f"데이터: {n_couples} couples")
     print()
     
-    k_values = [1, 5, 10, 20, 50]
+    k_values = [5, 10, 20, 50]
     
     # Female → Male
     print("📊 Female → Male 검색:")
+    print(f"    Accuracy:  {metrics['f2m'].get('recall@1', 0) * 100:6.2f}%")
     for k in k_values:
         recall = metrics['f2m'][f'recall@{k}'] * 100
-        print(f"    Recall@{k:2d}: {recall:6.2f}%")
+        print(f"    Hit@{k:2d}:   {recall:6.2f}%")
     print(f"    MRR:       {metrics['f2m']['mrr']:.4f}")
     print()
     
     # Male → Female
     print("📊 Male → Female 검색:")
+    print(f"    Accuracy:  {metrics['m2f'].get('recall@1', 0) * 100:6.2f}%")
     for k in k_values:
         recall = metrics['m2f'][f'recall@{k}'] * 100
-        print(f"    Recall@{k:2d}: {recall:6.2f}%")
+        print(f"    Hit@{k:2d}:   {recall:6.2f}%")
     print(f"    MRR:       {metrics['m2f']['mrr']:.4f}")
     print()
     
     # 양방향 평균
     print("📊 평균 (양방향):")
+    print(f"    Accuracy:  {metrics['avg'].get('recall@1', 0) * 100:6.2f}%")
     for k in k_values:
         recall = metrics['avg'][f'recall@{k}'] * 100
-        print(f"    Recall@{k:2d}: {recall:6.2f}%")
+        print(f"    Hit@{k:2d}:   {recall:6.2f}%")
     print(f"    MRR:       {metrics['avg']['mrr']:.4f}")
     
     print("=" * 50 + "\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate Qwen3-VL baseline model")
-    
-    # 데이터 관련
+    parser = argparse.ArgumentParser(description="베이스라인 모델 평가")
     parser.add_argument("--data-dir", type=str, 
-                        default=os.path.expanduser("~/data/mutual-like-validations/images"),
-                        help="커플 이미지 데이터 디렉토리")
-    parser.add_argument("--splits-file", type=str, default="couple_splits.json",
-                        help="커플 분할 JSON 파일")
-    parser.add_argument("--fold", type=int, default=None,
-                        help="평가할 Fold 번호 (0-4). splits-file에서 test set 로드")
-    parser.add_argument("--test-ids", type=str, default=None,
-                        help="직접 지정할 테스트 커플 ID (쉼표 구분)")
-    
-    # 모델 관련
-    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-VL-2B-Instruct",
-                        help="Qwen3-VL 모델 이름")
-    parser.add_argument("--embedding-dim", type=int, default=2048,
-                        help="임베딩 차원")
-    
-    # 평가 관련
-    parser.add_argument("--batch-size", type=int, default=16,
-                        help="배치 크기")
-    parser.add_argument("--image-size", type=int, default=768,
-                        help="이미지 리사이즈 크기 (긴 변)")
-    
+                        default=os.path.expanduser("~/data/mutual-like-validations/images"))
+    parser.add_argument("--splits", type=str, default="couple_splits.json",
+                        help="분할 JSON 파일")
+    parser.add_argument("--pooling-mode", type=str, default="mean", choices=["mean", "eos"])
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--output-dir", type=str, default="./baseline_evaluation_results")
     args = parser.parse_args()
     
-    # 디바이스 설정
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using device: {device}")
+    logger.info(f"디바이스: {device}")
     
-    # 테스트 커플 ID 결정
-    if args.test_ids:
-        test_ids = [int(x.strip()) for x in args.test_ids.split(",")]
-        fold = None
-    elif args.fold is not None:
-        with open(args.splits_file, 'r') as f:
-            splits = json.load(f)
-        
-        fold_data = splits['folds'][args.fold]
-        test_ids = fold_data.get('test', fold_data.get('valid', []))
-        fold = args.fold
-        logger.info(f"Loaded Fold {args.fold}: {len(test_ids)} test couples")
-    else:
-        # 기본값: splits 파일에서 전체 valid/test set 사용
-        if os.path.exists(args.splits_file):
-            with open(args.splits_file, 'r') as f:
-                splits = json.load(f)
-            # 첫 번째 fold의 valid 사용
-            test_ids = splits['folds'][0].get('test', splits['folds'][0].get('valid', []))
-            fold = 0
-        else:
-            logger.error("--fold 또는 --test-ids를 지정해주세요.")
-            return 1
-    
-    logger.info(f"Evaluating on {len(test_ids)} couples")
-    
-    # 데이터셋 생성
-    dataset = CoupleDataset(test_ids, args.data_dir, args.image_size)
-    
-    if len(dataset) == 0:
-        logger.error("유효한 커플 데이터가 없습니다.")
+    # 분할 파일에서 test set 로드
+    if not os.path.exists(args.splits):
+        logger.error(f"분할 파일 없음: {args.splits}")
+        logger.error("python scripts/prepare_splits.py 실행 필요")
         return 1
     
-    # 모델 로드 (베이스라인: 프로젝션 헤드 없음)
-    logger.info(f"Loading baseline model: {args.model_name}")
+    with open(args.splits, 'r') as f:
+        splits = json.load(f)
+    
+    test_ids = splits['test']
+    logger.info(f"Test set: {len(test_ids)}개")
+    
+    # 데이터셋
+    dataset = CoupleDataset(test_ids, args.data_dir, 768)
+    
+    if len(dataset) == 0:
+        logger.error("유효한 데이터 없음")
+        return 1
+    
+    # 모델 로드
+    logger.info(f"모델 로드: Qwen/Qwen3-VL-2B-Instruct (pooling: {args.pooling_mode})")
     backbone = Qwen3VLFeatureExtractor(
-        model_name=args.model_name,
-        embedding_dim=args.embedding_dim,
+        model_name="Qwen/Qwen3-VL-2B-Instruct",
+        embedding_dim=2048,
         freeze_vision_encoder=True,
         use_projection_head=False,
+        pooling_mode=args.pooling_mode,
         device=device
     )
     
-    # 평가 수행
+    # 평가
     metrics = evaluate_baseline(backbone, dataset, device, args.batch_size)
     
-    # 결과 출력
-    print_results(metrics, len(dataset), fold)
+    print_results(metrics, len(dataset))
     
-    # 결과를 JSON으로도 저장 (선택적)
-    result_file = f"baseline_results_fold{fold}.json" if fold is not None else "baseline_results.json"
+    # 결과 저장
+    os.makedirs(args.output_dir, exist_ok=True)
+    result_file = os.path.join(args.output_dir, "baseline_results.json")
     with open(result_file, 'w') as f:
         json.dump({
-            'fold': fold,
             'n_couples': len(dataset),
+            'pooling_mode': args.pooling_mode,
             'metrics': {
                 'f2m': {k: float(v) for k, v in metrics['f2m'].items()},
                 'm2f': {k: float(v) for k, v in metrics['m2f'].items()},
                 'avg': {k: float(v) for k, v in metrics['avg'].items()}
-            },
-            'config': {
-                'model_name': args.model_name,
-                'embedding_dim': args.embedding_dim,
-                'image_size': args.image_size
             }
         }, f, indent=2)
-    logger.info(f"Results saved to {result_file}")
+    logger.info(f"저장됨: {result_file}")
     
     return 0
 

@@ -4,8 +4,70 @@ Qwen3-VL Vision-Language Model Integration for Profile Feature Extraction
 
 import torch
 import torch.nn as nn
+from typing import List, Dict, Optional
 from transformers import AutoModelForImageTextToText, AutoProcessor
 from qwen_vl_utils import process_vision_info
+
+
+# ============================================================================
+# 프롬프트 설정
+# ============================================================================
+
+# 성별별 시스템 프롬프트
+SYSTEM_PROMPTS = {
+    "female": """You are a dating compatibility analyst.
+Analyze this woman's visual features that attract male partners.
+Focus on feminine charm, style, and overall appeal.
+Ignore background and irrelevant objects.""",
+    
+    "male": """You are a dating compatibility analyst.
+Analyze this man's visual features that attract female partners.
+Focus on masculine appeal, style, and overall charm.
+Ignore background and irrelevant objects.""",
+    
+    # 성별 불명시 기본값
+    "default": """You are a dating compatibility analyst.
+Focus on visual features that predict romantic matching success.
+Ignore background and irrelevant objects."""
+}
+
+# 성별별 유저 프롬프트 템플릿
+USER_PROMPT_TEMPLATES = {
+    "female": """Dating profile (Woman):
+- Appearance: {appearance_type}
+- Style: {style_vibe}
+- Personality: {personality_impression}
+- Grooming: {grooming_level}
+- Features: {physical_features_str}
+
+Analyze her romantic appeal.""",
+    
+    "male": """Dating profile (Man):
+- Appearance: {appearance_type}
+- Style: {style_vibe}
+- Personality: {personality_impression}
+- Grooming: {grooming_level}
+- Features: {physical_features_str}
+
+Analyze his romantic appeal.""",
+    
+    # 성별 불명시 기본값
+    "default": """Dating profile:
+- Appearance: {appearance_type}
+- Style: {style_vibe}
+- Personality: {personality_impression}
+- Grooming: {grooming_level}
+- Features: {physical_features_str}
+
+Analyze for romantic compatibility."""
+}
+
+# 메타데이터 없을 때 사용하는 기본 프롬프트
+DEFAULT_USER_PROMPTS = {
+    "female": "Dating profile photo of a woman. Analyze her romantic appeal.",
+    "male": "Dating profile photo of a man. Analyze his romantic appeal.",
+    "default": "Dating profile photo. Analyze for romantic compatibility."
+}
 
 
 class Qwen3VLFeatureExtractor(nn.Module):
@@ -18,6 +80,7 @@ class Qwen3VLFeatureExtractor(nn.Module):
         embedding_dim=512,
         freeze_vision_encoder=False,
         use_projection_head=True,
+        pooling_mode="mean",
         device="cuda"
     ):
         """
@@ -26,12 +89,14 @@ class Qwen3VLFeatureExtractor(nn.Module):
             embedding_dim: Target embedding dimension
             freeze_vision_encoder: Whether to freeze the vision encoder
             use_projection_head: Whether to add a projection head
+            pooling_mode: 'mean' for mean pooling, 'eos' for last token (EOS)
             device: Device to load model on
         """
         super(Qwen3VLFeatureExtractor, self).__init__()
 
         self.model_name = model_name
         self.embedding_dim = embedding_dim
+        self.pooling_mode = pooling_mode  # 'mean' or 'eos'
         self.device = device
 
         print(f"Loading Qwen3-VL model: {model_name}")
@@ -140,10 +205,17 @@ class Qwen3VLFeatureExtractor(nn.Module):
         # Get vision features from hidden states
         # For Qwen2-VL, we use the last hidden state and pool it
         hidden_states = outputs.hidden_states[-1]  # Last layer hidden states
+        # Shape: [batch_size, seq_len, hidden_size]
 
-        # Mean pooling over sequence length
-        # Shape: [batch_size, seq_len, hidden_size] -> [batch_size, hidden_size]
-        pooled_features = hidden_states.mean(dim=1)
+        # Pooling strategy
+        if self.pooling_mode == "eos":
+            # EOS Pooling: Use the last token (typically EOS/end token)
+            # Shape: [batch_size, hidden_size]
+            pooled_features = hidden_states[:, -1, :]
+        else:
+            # Mean Pooling: Average over sequence length (default)
+            # Shape: [batch_size, hidden_size]
+            pooled_features = hidden_states.mean(dim=1)
 
         # Work in float32 for the projection head to avoid
         # dtype mismatches with the half-precision backbone.
@@ -155,7 +227,61 @@ class Qwen3VLFeatureExtractor(nn.Module):
 
         return pooled_features
 
-    def forward(self, images):
+    def _build_user_prompt(self, metadata: Optional[Dict] = None) -> str:
+        """
+        메타데이터를 기반으로 유저 프롬프트 생성
+        
+        Args:
+            metadata: 메타데이터 딕셔너리
+                - gender: str ('female', 'male')
+                - appearance_type: str
+                - style_vibe: str
+                - personality_impression: str
+                - grooming_level: str
+                - physical_features: List[str]
+        
+        Returns:
+            user_prompt: 포맷팅된 유저 프롬프트 문자열
+        """
+        # 성별 결정 (기본값: 'default')
+        gender = metadata.get('gender', 'default') if metadata else 'default'
+        if gender not in USER_PROMPT_TEMPLATES:
+            gender = 'default'
+        
+        if metadata is None:
+            return DEFAULT_USER_PROMPTS.get(gender, DEFAULT_USER_PROMPTS['default'])
+        
+        # physical_features 리스트를 문자열로 변환
+        physical_features = metadata.get('physical_features', [])
+        if isinstance(physical_features, list):
+            physical_features_str = ', '.join(physical_features)
+        else:
+            physical_features_str = str(physical_features)
+        
+        return USER_PROMPT_TEMPLATES[gender].format(
+            appearance_type=metadata.get('appearance_type', 'Unknown'),
+            style_vibe=metadata.get('style_vibe', 'Unknown'),
+            personality_impression=metadata.get('personality_impression', 'Unknown'),
+            grooming_level=metadata.get('grooming_level', 'Unknown'),
+            physical_features_str=physical_features_str
+        )
+    
+    def _get_system_prompt(self, metadata: Optional[Dict] = None) -> str:
+        """
+        성별에 따른 시스템 프롬프트 반환
+        
+        Args:
+            metadata: 메타데이터 딕셔너리 (gender 필드 포함)
+        
+        Returns:
+            system_prompt: 성별에 맞는 시스템 프롬프트
+        """
+        gender = metadata.get('gender', 'default') if metadata else 'default'
+        if gender not in SYSTEM_PROMPTS:
+            gender = 'default'
+        return SYSTEM_PROMPTS[gender]
+
+    def forward(self, images, metadata: Optional[List[Dict]] = None):
         """
         Forward pass for feature extraction
 
@@ -163,6 +289,10 @@ class Qwen3VLFeatureExtractor(nn.Module):
             images: PIL Images or image tensors (already preprocessed)
                    If PIL Images: list of PIL.Image objects
                    If tensors: [batch_size, 3, H, W]
+            metadata: Optional list of metadata dictionaries (one per image)
+                   Each dict should contain:
+                   - appearance_type, style_vibe, personality_impression
+                   - grooming_level, physical_features
 
         Returns:
             embeddings: Feature embeddings [batch_size, embedding_dim]
@@ -171,18 +301,27 @@ class Qwen3VLFeatureExtractor(nn.Module):
         if isinstance(images, list):
             # PIL Images
             # Create a list of conversations (one per image) to enable batch processing
-            conversations = [
-                [
+            conversations = []
+            for i, img in enumerate(images):
+                # 메타데이터가 있으면 해당 인덱스의 메타데이터 사용
+                meta = metadata[i] if metadata and i < len(metadata) else None
+                user_prompt = self._build_user_prompt(meta)
+                system_prompt = self._get_system_prompt(meta)
+                
+                conversation = [
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
                     {
                         "role": "user",
                         "content": [
                             {"type": "image", "image": img},
-                            {"type": "text", "text": "Describe this person's appearance."}
+                            {"type": "text", "text": user_prompt}
                         ]
                     }
                 ]
-                for img in images
-            ]
+                conversations.append(conversation)
 
             # Prepare inputs for batch
             texts = [
@@ -369,6 +508,10 @@ class Qwen3VLWithTextFeatureExtractor(Qwen3VLFeatureExtractor):
         # conversations is a list of lists (batch of conversations)
         conversations = [
             [
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT
+                },
                 {
                     "role": "user",
                     "content": [

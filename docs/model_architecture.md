@@ -1,627 +1,339 @@
-# 커플 매칭 모델 아키텍처 및 학습 구조
+# 커플 매칭 모델 기술 문서
 
-> 📅 작성일: 2025-12-22  
-> 📁 프로젝트: NLP-Character-feature-extraction
-
----
-
-## 목차
-
-1. [개요](#1-개요)
-2. [모델 아키텍처](#2-모델-아키텍처)
-3. [입력(Input) 처리](#3-입력input-처리)
-4. [Feature 추출 과정](#4-feature-추출-과정)
-5. [출력(Output) 구조](#5-출력output-구조)
-6. [학습 방법](#6-학습-방법)
-7. [평가 지표](#7-평가-지표)
-8. [하이퍼파라미터 설정](#8-하이퍼파라미터-설정)
+> **버전**: v3.0 (2024-12-22)  
+> **목적**: 이미지 기반 커플 호환성 예측을 위한 학습 및 평가 파이프라인
 
 ---
 
 ## 1. 개요
 
-본 프로젝트는 **Vision-Language Model(VLM)**을 활용한 커플 매칭 예측 모델입니다.  
-실제 커플 이미지 쌍을 학습하여, 여성 이미지가 주어졌을 때 매칭되는 남성 이미지를 검색(Retrieval)하는 것이 목표입니다.
+본 프로젝트는 Vision-Language Model(VLM)을 활용하여 커플 이미지 간의 호환성을 예측하는 모델을 학습합니다.
 
-### 핵심 구성요소
+### 핵심 특징
 
-| 구성요소            | 역할                       | 파일 위치                          |
-| ------------------- | -------------------------- | ---------------------------------- |
-| **Backbone**        | Qwen3-VL 기반 특징 추출    | `src/models/qwen_backbone.py`      |
-| **Projection Head** | 임베딩 차원 축소 및 정규화 | `src/models/projection.py`         |
-| **학습 스크립트**   | InfoNCE Loss 기반 학습     | `scripts/train_couple_matching.py` |
+- **Backbone**: Qwen3-VL-2B (사전학습된 Vision-Language Model)
+- **학습 방식**: Contrastive Learning (InfoNCE Loss)
+- **성별별 독립 Projection Head**: 남/녀 이미지를 각각 다른 임베딩 공간으로 매핑
 
 ---
 
-## 2. 모델 아키텍처
+## 2. 모델 구조
 
-### 2.1 전체 구조 다이어그램
+### 2.1 전체 아키텍처
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Input Pipeline                            │
-│  ┌─────────────┐    ┌─────────────┐                             │
-│  │ Female Image│    │ Male Image  │                             │
-│  └──────┬──────┘    └──────┬──────┘                             │
-│         │                  │                                     │
-│         ▼                  ▼                                     │
-│  ┌─────────────────────────────────────────┐                    │
-│  │     ResizeLongestEdge (max_size=768)    │                    │
-│  └─────────────────────────────────────────┘                    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Qwen3-VL Backbone (Frozen)                    │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    Vision Encoder                        │   │
-│  │     (ViT-based, frozen during training)                 │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                              │                                   │
-│                              ▼                                   │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              Language Model Layers                       │   │
-│  │     (Transformer Decoder, frozen during training)        │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                              │                                   │
-│                              ▼                                   │
-│         hidden_states[-1]: [B, seq_len, 2048]                   │
-│                              │                                   │
-│                              ▼                                   │
-│              Mean Pooling: [B, 2048]                            │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                 Projection Head (Trainable)                     │
-│  ┌────────────┐   ┌────────────┐   ┌────────────┐   ┌────────┐ │
-│  │Linear(2048 │──▶│ BatchNorm  │──▶│    ReLU    │──▶│Linear  │ │
-│  │   →1024)   │   │   (1024)   │   │            │   │(1024   │ │
-│  │            │   │            │   │            │   │ →256)  │ │
-│  └────────────┘   └────────────┘   └────────────┘   └────────┘ │
-│                                                          │      │
-│                                                          ▼      │
-│                                            L2 Normalize: [B,256]│
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                   Output Embedding: [B, 256]
+┌─────────────────────────────────────────────────────────────┐
+│                     Training Pipeline                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Female Image                        Male Image              │
+│       │                                   │                  │
+│       ▼                                   ▼                  │
+│  ┌─────────────┐                   ┌─────────────┐          │
+│  │  Female     │                   │   Male      │          │
+│  │  Prompt     │                   │   Prompt    │          │
+│  └─────────────┘                   └─────────────┘          │
+│       │                                   │                  │
+│       ▼                                   ▼                  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              Qwen3-VL Backbone (동결)                │    │
+│  │              - Vision Encoder                        │    │
+│  │              - LLM (Hidden States 추출)              │    │
+│  └─────────────────────────────────────────────────────┘    │
+│       │                                   │                  │
+│       ▼                                   ▼                  │
+│  [2048-dim]                          [2048-dim]             │
+│       │                                   │                  │
+│       ▼                                   ▼                  │
+│  ┌───────────────┐                ┌───────────────┐         │
+│  │ Female Head   │                │  Male Head    │         │
+│  │ Projection    │                │  Projection   │         │
+│  └───────────────┘                └───────────────┘         │
+│       │                                   │                  │
+│       ▼                                   ▼                  │
+│  [256-dim]                           [256-dim]              │
+│       │                                   │                  │
+│       └────────────┬──────────────────────┘                  │
+│                    ▼                                         │
+│             ┌─────────────┐                                  │
+│             │ InfoNCE Loss│                                  │
+│             └─────────────┘                                  │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Backbone: Qwen3VLFeatureExtractor
+### 2.2 구성 요소
 
-**파일**: `src/models/qwen_backbone.py`
+#### Backbone (Qwen3-VL-2B)
+
+| 항목             | 값                              |
+| ---------------- | ------------------------------- |
+| 모델명           | `Qwen/Qwen3-VL-2B-Instruct`     |
+| Hidden Dimension | 2048                            |
+| Pooling 방식     | Mean Pooling (기본) / EOS Token |
+| 학습 상태        | **동결 (Frozen)**               |
+
+#### Gender-Specific Projection Head
 
 ```python
-class Qwen3VLFeatureExtractor(nn.Module):
-    def __init__(
-        self,
-        model_name="Qwen/Qwen3-VL-2B-Instruct",
-        embedding_dim=2048,
-        freeze_vision_encoder=True,  # 학습 시 동결
-        use_projection_head=False,   # 외부 Projection Head 사용
-        device="cuda"
-    ):
-        super(Qwen3VLFeatureExtractor, self).__init__()
-
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            model_name,
-            dtype=torch.bfloat16,
-            device_map="auto",
-        )
-        self.processor = AutoProcessor.from_pretrained(model_name)
+class GenderSpecificProjection(nn.Module):
+    def __init__(self, input_dim=2048, hidden_dim=1024, output_dim=256):
+        self.female_head = ProjectionHead(input_dim, hidden_dim, output_dim)
+        self.male_head = ProjectionHead(input_dim, hidden_dim, output_dim)
 ```
 
-**핵심 특징**:
-
-- **모델**: Qwen/Qwen3-VL-2B-Instruct (약 20억 파라미터)
-- **정밀도**: bfloat16 (메모리 효율성)
-- **동결 상태**: Vision Encoder + Language Model 모두 동결
-- **학습 대상**: Projection Head만 학습
-
-### 2.3 Projection Head
-
-**파일**: `src/models/projection.py`
-
-```python
-class ProjectionHead(nn.Module):
-    """
-    Projection Head for Contrastive Learning.
-    Structure: Linear -> BatchNorm -> ReLU -> Linear -> L2 Normalization
-    """
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super().__init__()
-        self.layer1 = nn.Linear(input_dim, hidden_dim)   # 2048 → 1024
-        self.bn = nn.BatchNorm1d(hidden_dim)
-        self.relu = nn.ReLU()
-        self.layer2 = nn.Linear(hidden_dim, output_dim)  # 1024 → 256
-
-    def forward(self, x):
-        x = self.layer1(x)
-        x = self.bn(x)
-        x = self.relu(x)
-        x = self.layer2(x)
-        x = F.normalize(x, p=2, dim=1)  # L2 정규화
-        return x
-```
-
-**구조**:
-| 레이어 | 입력 차원 | 출력 차원 | 활성화 함수 |
-|--------|----------|----------|------------|
-| Linear 1 | 2048 | 1024 | - |
-| BatchNorm | 1024 | 1024 | - |
-| ReLU | 1024 | 1024 | ReLU |
-| Linear 2 | 1024 | 256 | - |
-| L2 Norm | 256 | 256 | - |
+| 레이어       | 입력 → 출력 |
+| ------------ | ----------- |
+| Linear       | 2048 → 1024 |
+| BatchNorm    | 1024        |
+| ReLU         | -           |
+| Linear       | 1024 → 256  |
+| L2 Normalize | -           |
 
 ---
 
-## 3. 입력(Input) 처리
+## 3. 프롬프트 전략
 
-### 3.1 데이터셋 구조
-
-**파일**: `scripts/train_couple_matching.py`
-
-커플 데이터는 다음과 같이 구성됩니다:
+### 3.1 시스템 프롬프트
 
 ```
-~/data/mutual-like-validations/images/
-├── couple_0/
-│   ├── female.png
-│   └── male.png
-├── couple_1/
-│   ├── female.png
-│   └── male.png
-└── ...
+Female: "You are analyzing a female profile for dating compatibility..."
+Male:   "You are analyzing a male profile for dating compatibility..."
 ```
 
-### 3.2 이미지 전처리
+### 3.2 사용자 프롬프트
 
-```python
-class ResizeLongestEdge:
-    """이미지의 긴 변을 max_size로 리사이즈"""
-    def __init__(self, max_size: int, interpolation=Image.BICUBIC):
-        self.max_size = max_size
-        self.interpolation = interpolation
-
-    def __call__(self, img: Image.Image) -> Image.Image:
-        w, h = img.size
-        scale = self.max_size / max(w, h)
-        if scale >= 1:
-            return img  # 이미 작으면 그대로
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        return img.resize((new_w, new_h), self.interpolation)
+```
+Female: "Analyze this woman's dating profile photo. Extract visual features..."
+Male:   "Analyze this man's dating profile photo. Extract visual features..."
 ```
 
-**전처리 과정**:
+### 3.3 특징 추출 과정
 
-1. **파일 로드**: `Image.open().convert('RGB')`
-2. **리사이즈**: 긴 변 기준 768px로 조정 (비율 유지)
-3. **보간법**: BICUBIC (고품질)
-
-### 3.3 VLM 입력 구성
-
-**파일**: `src/models/qwen_backbone.py` (Line 174-210)
-
-```python
-def forward(self, images):
-    if isinstance(images, list):
-        # PIL Images를 VLM 입력 형식으로 변환
-        conversations = [
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": img},
-                        {"type": "text", "text": "Describe this person's appearance."}
-                    ]
-                }
-            ]
-            for img in images
-        ]
-
-        # Chat template 적용
-        texts = [
-            self.processor.apply_chat_template(
-                conv, tokenize=False, add_generation_prompt=True
-            )
-            for conv in conversations
-        ]
-
-        # Vision 정보 처리
-        image_inputs, video_inputs = process_vision_info(conversations)
-
-        # Processor로 토큰화
-        inputs = self.processor(
-            text=texts,
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt"
-        )
-        inputs = inputs.to(self.device)
-```
-
-**입력 구성 요소**:
-
-| 요소                | 내용                                 | 목적                        |
-| ------------------- | ------------------------------------ | --------------------------- |
-| **이미지**          | PIL Image (RGB)                      | 시각적 특징 추출            |
-| **텍스트 프롬프트** | "Describe this person's appearance." | 외모 특징에 집중하도록 유도 |
-| **Chat Template**   | Qwen3 형식                           | 모델 입력 형식 맞춤         |
+1. 이미지 + 성별별 프롬프트 → Qwen3-VL 입력
+2. LLM의 마지막 레이어 Hidden States 추출
+3. Mean Pooling 또는 EOS Token 선택
+4. 성별별 Projection Head 통과
 
 ---
 
-## 4. Feature 추출 과정
+## 4. 학습 방법
 
-### 4.1 Hidden States 추출
-
-**파일**: `src/models/qwen_backbone.py` (Line 122-156)
-
-```python
-def extract_vision_features(self, inputs):
-    # 모델 forward pass (생성 없이 hidden states만 추출)
-    outputs = self.model(
-        **inputs,
-        output_hidden_states=True,
-        return_dict=True
-    )
-
-    # 마지막 레이어의 hidden states 사용
-    hidden_states = outputs.hidden_states[-1]  # [B, seq_len, 2048]
-
-    # Mean Pooling: 시퀀스 전체 평균
-    pooled_features = hidden_states.mean(dim=1)  # [B, 2048]
-
-    # float32로 변환 (Projection Head 호환성)
-    pooled_features = pooled_features.to(torch.float32)
-
-    return pooled_features
-```
-
-### 4.2 추출 위치 상세
-
-```
-Qwen3-VL Model Structure:
-├── Vision Encoder (ViT)
-│   └── Image → Visual Tokens
-├── Token Embedding
-│   └── Text → Text Tokens
-├── Transformer Decoder Layers
-│   ├── Layer 0
-│   ├── Layer 1
-│   ├── ...
-│   └── Layer N-1 (Last Layer) ← hidden_states[-1] 사용
-│       └── Shape: [batch_size, sequence_length, 2048]
-└── LM Head (사용 안 함)
-```
-
-**선택 근거**:
-
-- **마지막 레이어**: 가장 추상화된 고수준 의미(semantic) 표현
-- **Mean Pooling**: 이미지+텍스트 토큰 전체의 평균 표현
-- **차원**: 2048 (Qwen3-VL-2B의 hidden size)
-
----
-
-## 5. 출력(Output) 구조
-
-### 5.1 최종 임베딩
-
-```
-Input: PIL Image
-    ↓
-Backbone: [B, 2048] (raw features)
-    ↓
-Projection Head: [B, 256] (normalized embeddings)
-    ↓
-Output: 256차원 단위 벡터 (||v|| = 1)
-```
-
-### 5.2 임베딩 특성
-
-| 특성            | 값          | 설명                       |
-| --------------- | ----------- | -------------------------- |
-| **차원**        | 256         | 메모리 효율적, 검색에 적합 |
-| **정규화**      | L2 Norm = 1 | 코사인 유사도 = 내적       |
-| **데이터 타입** | float32     | 수치 안정성                |
-
-### 5.3 유사도 계산
-
-```python
-# 코사인 유사도 = 내적 (L2 정규화된 벡터의 경우)
-similarity = torch.matmul(female_embs, male_embs.T)  # [B, B]
-```
-
----
-
-## 6. 학습 방법
-
-### 6.1 학습 목표
-
-**목표**: 실제 커플 쌍의 임베딩은 가깝게, 비커플 쌍은 멀게 학습
-
-```
-같은 커플: female_i ↔ male_i → 유사도 높게
-다른 쌍:   female_i ↔ male_j (i≠j) → 유사도 낮게
-```
-
-### 6.2 InfoNCE Loss
-
-**파일**: `scripts/train_couple_matching.py` (Line 166-199)
+### 4.1 손실 함수: InfoNCE Loss
 
 ```python
 class InfoNCELoss(nn.Module):
-    """InfoNCE Loss for contrastive learning"""
-    def __init__(self, temperature: float = 0.07):
-        super().__init__()
+    def __init__(self, temperature=0.1):
         self.temperature = temperature
 
-    def forward(self, female_embs: torch.Tensor, male_embs: torch.Tensor) -> torch.Tensor:
-        batch_size = female_embs.size(0)
-
-        # 유사도 행렬: [B, B]
+    def forward(self, female_embs, male_embs):
+        # 유사도 행렬 계산
         logits = torch.matmul(female_embs, male_embs.T) / self.temperature
 
-        # 정답 레이블: 대각선 (i번 female ↔ i번 male)
-        labels = torch.arange(batch_size, device=logits.device)
+        # 대각선이 정답 (i번 female ↔ i번 male)
+        labels = torch.arange(batch_size)
 
-        # Female → Male 방향 loss
+        # 양방향 Cross Entropy
         loss_f2m = F.cross_entropy(logits, labels)
-
-        # Male → Female 방향 loss
         loss_m2f = F.cross_entropy(logits.T, labels)
 
-        # 양방향 평균
-        loss = (loss_f2m + loss_m2f) / 2
-
-        return loss
+        return (loss_f2m + loss_m2f) / 2
 ```
 
-### 6.3 Loss 수식
+### 4.2 학습 하이퍼파라미터
 
-$$\mathcal{L}_{InfoNCE} = -\frac{1}{2N} \sum_{i=1}^{N} \left[ \log \frac{e^{sim(f_i, m_i)/\tau}}{\sum_{j=1}^{N} e^{sim(f_i, m_j)/\tau}} + \log \frac{e^{sim(m_i, f_i)/\tau}}{\sum_{j=1}^{N} e^{sim(m_i, f_j)/\tau}} \right]$$
+| 파라미터      | 값   | 설명                     |
+| ------------- | ---- | ------------------------ |
+| Batch Size    | 48   | InfoNCE에 유리한 큰 배치 |
+| Learning Rate | 5e-5 | AdamW                    |
+| Weight Decay  | 1e-3 | 규제 강화                |
+| Epochs        | 30   | 최대 에폭                |
+| Temperature   | 0.1  | Softmax 스케일링         |
+| Patience      | 10   | Early Stopping           |
 
-- $f_i$: i번째 female 임베딩
-- $m_i$: i번째 male 임베딩 (실제 커플)
-- $\tau$: temperature (0.1)
-- $sim(\cdot, \cdot)$: 코사인 유사도 (내적)
+### 4.3 학습 파이프라인
 
-### 6.4 학습 과정 예시
+```bash
+# 1. 데이터 분할 생성
+python scripts/prepare_splits.py --train-ratio 0.7 --valid-ratio 0.15 --test-ratio 0.15
 
-```
-Batch Size = 4인 경우:
-
-유사도 행렬 (logits / temperature):
-              Male_0   Male_1   Male_2   Male_3
-Female_0  [  ⭐9.0     2.0      1.0      3.0  ]
-Female_1  [   1.0    ⭐8.5     2.0      1.5  ]
-Female_2  [   2.0     1.5    ⭐8.8     1.0  ]
-Female_3  [   1.0     2.0      1.0    ⭐9.2  ]
-
-CrossEntropy:
-- Female_0의 정답 = 0 (Male_0)
-- Female_1의 정답 = 1 (Male_1)
-- ...
-
-→ 대각선 값이 가장 높아지도록 학습!
-```
-
-### 6.5 학습 루프
-
-**파일**: `scripts/train_couple_matching.py` (Line 255-304)
-
-```python
-def train_one_epoch(backbone, projection_head, dataloader, optimizer, criterion,
-                    scaler, device, config, epoch):
-    projection_head.train()
-    backbone.eval()  # Backbone은 항상 eval (동결)
-
-    for batch in pbar:
-        female_imgs = batch['female_imgs']
-        male_imgs = batch['male_imgs']
-
-        optimizer.zero_grad()
-
-        with autocast('cuda', enabled=config.use_amp):
-            # Forward pass (Backbone은 gradient 계산 안 함)
-            with torch.no_grad():
-                female_features = backbone.forward(female_imgs)
-                male_features = backbone.forward(male_imgs)
-
-            # Projection Head는 gradient 계산
-            female_embs = projection_head(female_features)
-            male_embs = projection_head(male_features)
-
-            # Loss 계산
-            loss = criterion(female_embs, male_embs)
-
-        # Backward (Projection Head만 업데이트)
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+# 2. 학습 실행
+python scripts/train_couple_matching.py --splits couple_splits.json
 ```
 
 ---
 
-## 7. 평가 지표
+## 5. 평가 방법
 
-### 7.1 Recall@K
+### 5.1 평가 지표
 
-**파일**: `scripts/train_couple_matching.py` (Line 232-252)
+| 지표                 | 설명                           |
+| -------------------- | ------------------------------ |
+| **Accuracy (Hit@1)** | 정확히 1위로 매칭된 비율       |
+| **Hit@K**            | 상위 K개 내에 정답이 있는 비율 |
+| **MRR**              | Mean Reciprocal Rank           |
 
-```python
-def compute_recall_at_k(female_embs, male_embs, k_values=[1, 5, 10]):
-    n = len(female_embs)
-    similarity = np.dot(female_embs, male_embs.T)
+### 5.2 평가 방향
 
-    results = {}
+- **Female → Male**: 여성 임베딩으로 남성 검색
+- **Male → Female**: 남성 임베딩으로 여성 검색
+- **Average**: 양방향 평균
 
-    # Female → Male 검색
-    ranks_f2m = []
-    for i in range(n):
-        sorted_idx = np.argsort(-similarity[i])  # 유사도 내림차순 정렬
-        rank = np.where(sorted_idx == i)[0][0]   # 정답의 순위 (0-indexed)
-        ranks_f2m.append(rank)
-    ranks_f2m = np.array(ranks_f2m)
+### 5.3 베이스라인 vs 학습 모델
 
-    for k in k_values:
-        results[f'recall@{k}'] = np.mean(ranks_f2m < k)  # 상위 K개 안에 정답 비율
+| 구분          | 베이스라인                     | 학습 모델                       |
+| ------------- | ------------------------------ | ------------------------------- |
+| Backbone      | Qwen3-VL                       | Qwen3-VL                        |
+| Projection    | ❌ 없음                        | ✅ 성별별 Head                  |
+| 임베딩 차원   | 2048                           | 256                             |
+| 스크립트      | `evaluate_baseline.py`         | `evaluate_finetuned.py`         |
+| 결과 디렉토리 | `baseline_evaluation_results/` | `finetuned_evaluation_results/` |
 
-    results['mrr'] = np.mean(1.0 / (ranks_f2m + 1))  # Mean Reciprocal Rank
+### 5.4 평가 실행
 
-    return results
-```
+```bash
+# 베이스라인 평가
+python scripts/evaluate_baseline.py --splits couple_splits.json
 
-### 7.2 지표 정의
-
-| 지표          | 수식                                      | 의미          |
-| ------------- | ----------------------------------------- | ------------- |
-| **Recall@1**  | $\frac{1}{N}\sum \mathbb{1}[rank_i = 0]$  | 1위 정확도    |
-| **Recall@5**  | $\frac{1}{N}\sum \mathbb{1}[rank_i < 5]$  | Top-5 정확도  |
-| **Recall@10** | $\frac{1}{N}\sum \mathbb{1}[rank_i < 10]$ | Top-10 정확도 |
-| **MRR**       | $\frac{1}{N}\sum \frac{1}{rank_i + 1}$    | 평균 역순위   |
-
-### 7.3 해석 예시
-
-```
-N = 100명의 female에 대해 100명의 male 중 검색:
-
-Recall@1 = 15% → 15명이 1위로 정답을 맞춤
-Recall@5 = 35% → 35명이 상위 5개 안에 정답 포함
-MRR = 0.25     → 평균적으로 정답이 4위 근처
+# 학습 모델 평가
+python scripts/evaluate_finetuned.py --splits couple_splits.json \
+    --checkpoint ./couple_matching_checkpoints/best_model.pth
 ```
 
 ---
 
-## 8. 하이퍼파라미터 설정
+## 6. 데이터 분할
 
-### 8.1 모델 설정
+### 6.1 분할 비율
 
-**파일**: `scripts/train_couple_matching.py` (Line 49-84)
+| Set   | 비율 | 용도                          |
+| ----- | ---- | ----------------------------- |
+| Train | 70%  | 모델 학습                     |
+| Valid | 15%  | 학습 중 검증 (Early Stopping) |
+| Test  | 15%  | 최종 성능 평가                |
 
-```python
-@dataclass
-class TrainConfig:
-    # 모델 설정
-    model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
-    embedding_dim: int = 2048          # Backbone 출력 차원
-    projection_hidden_dim: int = 1024  # Projection 중간 차원
-    projection_output_dim: int = 256   # 최종 임베딩 차원
+### 6.2 분할 파일 구조 (`couple_splits.json`)
 
-    # 학습 하이퍼파라미터
-    batch_size: int = 48               # 큰 배치 (InfoNCE에 유리)
-    learning_rate: float = 5e-5        # 낮은 학습률
-    weight_decay: float = 1e-3         # 규제 강화
-    epochs: int = 30
-    temperature: float = 0.1           # InfoNCE temperature
-
-    # 스케줄러
-    warmup_epochs: int = 2
-
-    # Early stopping
-    patience: int = 10
-
-    # 이미지
-    image_size: int = 768
-
-    # Mixed precision
-    use_amp: bool = True
+```json
+{
+  "train": [5, 12, 23, 45, ...],
+  "valid": [78, 102, 156, ...],
+  "test": [234, 389, 456, ...],
+  "config": {
+    "train_ratio": 0.7,
+    "valid_ratio": 0.15,
+    "test_ratio": 0.15,
+    "seed": 42,
+    "total_couples": 774
+  }
+}
 ```
-
-### 8.2 Optimizer 및 Scheduler
-
-```python
-# AdamW Optimizer (Projection Head만)
-optimizer = torch.optim.AdamW(
-    projection_head.parameters(),
-    lr=config.learning_rate,    # 5e-5
-    weight_decay=config.weight_decay  # 1e-3
-)
-
-# Cosine Annealing Scheduler
-scheduler = CosineAnnealingLR(optimizer, T_max=config.epochs)
-
-# Mixed Precision Scaler
-scaler = GradScaler('cuda', enabled=config.use_amp)
-```
-
-### 8.3 하이퍼파라미터 선택 근거
-
-| 파라미터          | 값   | 근거                                               |
-| ----------------- | ---- | -------------------------------------------------- |
-| **Batch Size**    | 48   | InfoNCE는 큰 배치에서 더 많은 negative sample 확보 |
-| **Learning Rate** | 5e-5 | 사전학습 가중치 보존, 안정적 수렴                  |
-| **Temperature**   | 0.1  | 너무 낮으면 과적합, 너무 높으면 구분력 저하        |
-| **Weight Decay**  | 1e-3 | 과적합 방지                                        |
-| **Output Dim**    | 256  | 검색 효율성 & 표현력 균형                          |
-| **Image Size**    | 768  | VLM 권장 크기, 세부 특징 보존                      |
 
 ---
 
-## 9. 체크포인트 저장
+## 7. 파일 구조
 
-**파일**: `scripts/train_couple_matching.py` (Line 448-457)
-
-```python
-checkpoint_path = os.path.join(config.checkpoint_dir, f"best_model_fold{args.fold}.pth")
-
-torch.save({
-    'epoch': epoch,
-    'fold': args.fold,
-    'backbone_state_dict': backbone.state_dict(),
-    'projection_head_state_dict': projection_head.state_dict(),
-    'optimizer_state_dict': optimizer.state_dict(),
-    'best_recall': best_recall,
-    'metrics': recall_metrics,
-    'config': config.__dict__
-}, checkpoint_path)
 ```
-
-**저장 항목**:
-
-- 에폭 정보
-- Backbone 가중치 (optional, 동결 상태)
-- Projection Head 가중치 (핵심)
-- Optimizer 상태
-- 성능 메트릭
-- 설정값
+NLP-Character-feature-extraction/
+├── scripts/
+│   ├── prepare_splits.py           # 데이터 분할 생성
+│   ├── train_couple_matching.py    # 모델 학습
+│   ├── evaluate_baseline.py        # 베이스라인 평가
+│   └── evaluate_finetuned.py       # 학습 모델 평가
+├── src/
+│   └── models/
+│       ├── qwen_backbone.py        # Qwen3-VL Feature Extractor
+│       └── projection.py           # Projection Head 정의
+├── couple_splits.json              # 데이터 분할 정보
+├── couple_matching_checkpoints/    # 학습된 가중치
+│   └── best_model.pth
+├── baseline_evaluation_results/    # 베이스라인 평가 결과
+└── finetuned_evaluation_results/   # 학습 모델 평가 결과
+```
 
 ---
 
-## 10. 요약
+## 8. 체크포인트 구조
+
+```python
+{
+    'epoch': 15,
+    'backbone_state_dict': {...},      # Qwen3-VL 가중치
+    'projection_state_dict': {         # 성별별 Head 가중치
+        'female_head.layer1.weight': ...,
+        'female_head.layer2.weight': ...,
+        'male_head.layer1.weight': ...,
+        'male_head.layer2.weight': ...,
+    },
+    'optimizer_state_dict': {...},
+    'best_accuracy': 0.15,
+    'metrics': {...},
+    'config': {...}
+}
+```
+
+---
+
+## 9. 실행 가이드
 
 ### 전체 파이프라인
 
+```bash
+# Step 1: 데이터 분할
+python scripts/prepare_splits.py \
+    --data-dir ~/data/mutual-like-validations/images \
+    --train-ratio 0.7 \
+    --valid-ratio 0.15 \
+    --test-ratio 0.15
+
+# Step 2: 모델 학습
+python scripts/train_couple_matching.py \
+    --splits couple_splits.json \
+    --epochs 30 \
+    --lr 5e-5
+
+# Step 3: 베이스라인 평가
+python scripts/evaluate_baseline.py \
+    --splits couple_splits.json
+
+# Step 4: 학습 모델 평가
+python scripts/evaluate_finetuned.py \
+    --splits couple_splits.json \
+    --checkpoint ./couple_matching_checkpoints/best_model.pth
 ```
-1. Input
-   └── Female/Male 이미지 쌍 (768px 리사이즈)
 
-2. VLM Processing
-   └── Qwen3-VL로 이미지+프롬프트 처리
-   └── 마지막 레이어 hidden states 추출
-   └── Mean Pooling → [B, 2048]
+---
 
-3. Projection
-   └── Linear → BatchNorm → ReLU → Linear
-   └── L2 Normalization → [B, 256]
+## 10. 주요 설계 결정
 
-4. Training
-   └── InfoNCE Loss (temperature=0.1)
-   └── 대각선(실제 커플) 유사도 최대화
+### Q: 왜 성별별 독립 Projection Head?
 
-5. Evaluation
-   └── Recall@K, MRR로 검색 성능 측정
-```
+동일한 Projection Head를 사용할 경우, 남녀 이미지가 동일한 임베딩 공간에 매핑되어
+성별 고유의 특징을 학습하기 어렵습니다. 성별별 Head를 분리함으로써:
 
-### 핵심 설계 결정
+- 여성 이미지의 "매력적인 특징" → Female Head → Female 임베딩 공간
+- 남성 이미지의 "매력적인 특징" → Male Head → Male 임베딩 공간
 
-| 설계 결정              | 선택 | 이유                            |
-| ---------------------- | ---- | ------------------------------- |
-| Backbone 동결          | ✅   | 사전학습 지식 보존, 메모리 절약 |
-| Projection Head만 학습 | ✅   | 빠른 학습, 과적합 방지          |
-| InfoNCE Loss           | ✅   | SOTA contrastive learning 방법  |
-| 양방향 Loss            | ✅   | 대칭적 유사도 학습              |
-| Mean Pooling           | ✅   | 전체 특징 활용                  |
-| L2 정규화              | ✅   | 코사인 유사도 = 내적            |
+각 성별에 최적화된 임베딩을 학습할 수 있습니다.
+
+### Q: 왜 Backbone을 동결?
+
+- Qwen3-VL은 대규모 사전학습으로 이미 강력한 시각적 이해 능력 보유
+- 774쌍의 작은 데이터셋으로 미세조정 시 과적합 위험
+- Projection Head만 학습하여 효율적인 전이 학습 수행
+
+### Q: 왜 InfoNCE Loss?
+
+- Contrastive Learning의 표준 손실 함수
+- 배치 내 모든 negative pair를 효율적으로 활용
+- Temperature 파라미터로 유사도 분포 조절 가능
+
+---
+
+## 11. 향후 개선 방안
+
+1. **Hard Negative Mining**: 더 어려운 negative 샘플 선택
+2. **Multi-Modal Features**: 프로필 텍스트 정보 추가
+3. **Larger Backbone**: Qwen3-VL-7B 사용 (메모리 허용 시)
+4. **Data Augmentation**: 이미지 증강 기법 적용
+5. **Cross-Attention**: 남녀 임베딩 간 교차 어텐션 추가

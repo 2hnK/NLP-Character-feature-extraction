@@ -48,7 +48,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 class CoupleEvalConfig:
     """학습된 모델 평가 설정"""
     # 데이터
-    data_dir: str = os.path.expanduser("~/data/mutual-like-validations/images")
+    data_dir: str = "/data/dating_dataset"
+    metadata_file: str = "/data/dating_dataset/datasets_labeled.json"
     checkpoint_path: str = "./couple_matching_checkpoints/best_model.pth"
     
     # 모델 설정 (학습 시와 동일)
@@ -126,10 +127,20 @@ def load_model(checkpoint_path: str, config: CoupleEvalConfig, device: str):
     return backbone, projection
 
 
+def find_image_path(base_dir: Path, couple_id: int, gender: str) -> Optional[Path]:
+    """이미지 파일 경로 찾기 (jpg/png 확장자 자동 탐지)"""
+    couple_dir = base_dir / f"couple_{couple_id}"
+    for ext in ['jpg', 'png', 'jpeg']:
+        path = couple_dir / f"{gender}.{ext}"
+        if path.exists():
+            return path
+    return None
+
+
 def load_couple_images(
     couple_ids: List[int], data_dir: str, image_size: int = 768
 ) -> Tuple[List[Tuple[int, Image.Image, Image.Image]], List[int]]:
-    """커플 이미지 로드"""
+    """커플 이미지 로드 (jpg/png 확장자 자동 탐지)"""
     transform = ResizeLongestEdge(max_size=image_size)
     couples = []
     skipped = []
@@ -138,11 +149,10 @@ def load_couple_images(
     
     for couple_num in tqdm(couple_ids, desc="이미지 로드"):
         try:
-            couple_dir = data_path / f"couple_{couple_num}"
-            female_path = couple_dir / "female.png"
-            male_path = couple_dir / "male.png"
+            female_path = find_image_path(data_path, couple_num, 'female')
+            male_path = find_image_path(data_path, couple_num, 'male')
             
-            if not female_path.exists() or not male_path.exists():
+            if not female_path or not male_path:
                 skipped.append(couple_num)
                 continue
             
@@ -392,7 +402,7 @@ def save_results(metrics: Dict, output_dir: str):
 def main():
     parser = argparse.ArgumentParser(description="학습된 모델 평가")
     parser.add_argument("--data-dir", type=str, 
-                        default=os.path.expanduser("~/data/mutual-like-validations/images"))
+                        default="/data/dating_dataset")
     parser.add_argument("--splits", type=str, default="couple_splits.json",
                         help="분할 JSON 파일")
     parser.add_argument("--checkpoint", type=str, 

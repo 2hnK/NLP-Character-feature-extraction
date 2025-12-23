@@ -18,8 +18,11 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description="데이터 분할 JSON 생성")
     parser.add_argument("--data-dir", type=str, 
-                        default=os.path.expanduser("~/data/mutual-like-validations/images"),
+                        default="/data/dating_dataset",
                         help="커플 이미지 디렉토리")
+    parser.add_argument("--metadata", type=str, 
+                        default="/data/dating_dataset/datasets_labeled.json",
+                        help="라벨 메타데이터 JSON 파일 경로")
     parser.add_argument("--output", type=str, default="couple_splits.json",
                         help="출력 JSON 파일 경로")
     parser.add_argument("--train-ratio", type=float, default=0.7, help="학습 비율")
@@ -33,15 +36,28 @@ def main():
     if abs(total_ratio - 1.0) > 0.01:
         print(f"경고: 비율 합계가 1이 아닙니다 ({total_ratio})")
     
-    # 커플 ID 수집
+    # 커플 ID 수집 - 메타데이터 JSON에서 로드
     data_path = Path(args.data_dir)
     if not data_path.exists():
         print(f"오류: 디렉토리가 존재하지 않습니다: {args.data_dir}")
         return 1
     
-    couple_dirs = sorted([d.name for d in data_path.iterdir() 
-                          if d.is_dir() and d.name.startswith("couple_")])
-    all_ids = [int(d.split("_")[1]) for d in couple_dirs]
+    # 메타데이터에서 커플 ID 수집
+    if os.path.exists(args.metadata):
+        with open(args.metadata, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
+        all_ids = []
+        for couple in metadata:
+            couple_id = couple.get('couple_id', '')
+            if couple_id.startswith('couple_'):
+                num = int(couple_id.split('_')[1])
+                all_ids.append(num)
+        all_ids = sorted(list(set(all_ids)))  # 중복 제거 및 정렬
+    else:
+        # 폴백: 디렉토리 스캔
+        couple_dirs = sorted([d.name for d in data_path.iterdir() 
+                              if d.is_dir() and d.name.startswith("couple_")])
+        all_ids = [int(d.split("_")[1]) for d in couple_dirs]
     
     print(f"총 {len(all_ids)}개의 커플 발견")
     

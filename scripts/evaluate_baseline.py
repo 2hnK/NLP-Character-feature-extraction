@@ -48,7 +48,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 class EvalConfig:
     """베이스라인 평가 설정"""
     # 데이터
-    data_dir: str = os.path.expanduser("~/data/mutual-like-validations/images")
+    data_dir: str = "/data/dating_dataset"
+    metadata_file: str = "/data/dating_dataset/datasets_labeled.json"
     
     # 모델 설정
     model_name: str = "Qwen/Qwen3-VL-2B-Instruct"
@@ -80,25 +81,34 @@ class ResizeLongestEdge:
         return img.resize((new_w, new_h), self.interpolation)
 
 
+def find_image_path(base_dir: Path, couple_id: int, gender: str):
+    """이미지 파일 경로 찾기 (jpg/png 확장자 자동 탐지)"""
+    couple_dir = base_dir / f"couple_{couple_id}"
+    for ext in ['jpg', 'png', 'jpeg']:
+        path = couple_dir / f"{gender}.{ext}"
+        if path.exists():
+            return path
+    return None
+
+
 class CoupleDataset:
-    """커플 데이터셋"""
+    """커플 데이터셋 (jpg/png 확장자 자동 탐지)"""
     def __init__(self, couple_ids: List[int], data_dir: str, image_size: int = 768):
         self.data_dir = Path(data_dir)
         self.transform = ResizeLongestEdge(max_size=image_size)
         
-        # 유효한 커플만 필터링
-        self.valid_couples = []
+        # 유효한 커플만 필터링 (이미지 경로도 함께 저장)
+        self.valid_couples = []  # [(couple_id, female_path, male_path), ...]
         skipped = []
         for cid in couple_ids:
-            couple_dir = self.data_dir / f"couple_{cid}"
-            female_path = couple_dir / "female.png"
-            male_path = couple_dir / "male.png"
+            female_path = find_image_path(self.data_dir, cid, 'female')
+            male_path = find_image_path(self.data_dir, cid, 'male')
             
             try:
-                if female_path.exists() and male_path.exists():
+                if female_path and male_path:
                     Image.open(female_path).verify()
                     Image.open(male_path).verify()
-                    self.valid_couples.append(cid)
+                    self.valid_couples.append((cid, female_path, male_path))
                 else:
                     skipped.append(cid)
             except Exception:
@@ -113,11 +123,10 @@ class CoupleDataset:
     
     def get_couple(self, idx):
         """특정 인덱스의 커플 이미지 로드"""
-        couple_id = self.valid_couples[idx]
-        couple_dir = self.data_dir / f"couple_{couple_id}"
+        couple_id, female_path, male_path = self.valid_couples[idx]
         
-        female_img = Image.open(couple_dir / "female.png").convert('RGB')
-        male_img = Image.open(couple_dir / "male.png").convert('RGB')
+        female_img = Image.open(female_path).convert('RGB')
+        male_img = Image.open(male_path).convert('RGB')
         
         female_img = self.transform(female_img)
         male_img = self.transform(male_img)
@@ -291,7 +300,7 @@ def print_results(metrics: dict, n_couples: int):
 def main():
     parser = argparse.ArgumentParser(description="베이스라인 모델 평가")
     parser.add_argument("--data-dir", type=str, 
-                        default=os.path.expanduser("~/data/mutual-like-validations/images"))
+                        default="/data/dating_dataset")
     parser.add_argument("--splits", type=str, default="couple_splits.json",
                         help="분할 JSON 파일")
     parser.add_argument("--pooling-mode", type=str, default="mean", choices=["mean", "eos"])

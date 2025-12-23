@@ -199,8 +199,8 @@ if __name__ == "__main__":
     ])
     
     dataset = MatchingDataset(
-        jsonl_path=r"/home/sagemaker-user/data/dataset.jsonl",
-        image_root=r"/home/sagemaker-user/data/images",
+        jsonl_path=r"/data/dating_dataset/datasets_labeled.json",
+        image_root=r"/data/dating_dataset",
         transform=transform,
         limit=5,
         mode='train'

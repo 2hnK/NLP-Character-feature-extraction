@@ -59,6 +59,7 @@ class TrainConfig:
     embedding_dim: int = 2048
     projection_hidden_dim: int = 1024
     projection_output_dim: int = 256
+    pooling_mode: str = "mean"  # 'mean' or 'eos'
     
     # 학습 파라미터
     batch_size: int = 48
@@ -207,7 +208,7 @@ def load_model(config: TrainConfig, device: str):
     - Backbone: Qwen3-VL (동결)
     - Projection: 성별별 독립 헤드 (Female/Male)
     """
-    logger.info(f"Loading model: {config.model_name}")
+    logger.info(f"Loading model: {config.model_name} (pooling: {config.pooling_mode})")
     
     # Backbone 로드 (동결)
     backbone = Qwen3VLFeatureExtractor(
@@ -215,6 +216,7 @@ def load_model(config: TrainConfig, device: str):
         embedding_dim=config.embedding_dim,
         freeze_vision_encoder=True,
         use_projection_head=False,
+        pooling_mode=config.pooling_mode,
         device=device
     )
     
@@ -431,6 +433,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=48)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--pooling-mode", type=str, default="mean", 
+                        choices=["mean", "eos"],
+                        help="Pooling 방식: mean (평균) 또는 eos (마지막 토큰)")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="사전학습 체크포인트 경로")
     args = parser.parse_args()
@@ -441,6 +446,7 @@ def main():
     config.batch_size = args.batch_size
     config.epochs = args.epochs
     config.learning_rate = args.lr
+    config.pooling_mode = args.pooling_mode
     
     if args.checkpoint:
         config.pretrained_checkpoint = args.checkpoint

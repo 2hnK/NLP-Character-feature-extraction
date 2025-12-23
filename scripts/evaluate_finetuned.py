@@ -408,6 +408,8 @@ def main():
     parser.add_argument("--checkpoint", type=str, 
                         default="./couple_matching_checkpoints/best_model.pth")
     parser.add_argument("--pooling-mode", type=str, default="mean", choices=["mean", "eos"])
+    parser.add_argument("--projection-dim", type=int, default=256,
+                        help="Projection Head 출력 차원 (체크포인트와 일치해야 함)")
     parser.add_argument("--output-dir", type=str, default="./finetuned_evaluation_results")
     args = parser.parse_args()
     
@@ -415,6 +417,7 @@ def main():
     config.data_dir = args.data_dir
     config.checkpoint_path = args.checkpoint
     config.pooling_mode = args.pooling_mode
+    config.projection_output_dim = args.projection_dim
     config.output_dir = args.output_dir
     
     # 경로 확인

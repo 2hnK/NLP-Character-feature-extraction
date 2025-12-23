@@ -436,6 +436,10 @@ def main():
     parser.add_argument("--pooling-mode", type=str, default="mean", 
                         choices=["mean", "eos"],
                         help="Pooling 방식: mean (평균) 또는 eos (마지막 토큰)")
+    parser.add_argument("--patience", type=int, default=10,
+                        help="Early stopping patience (기본: 10)")
+    parser.add_argument("--temperature", type=float, default=0.1,
+                        help="InfoNCE loss temperature (기본: 0.1)")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="사전학습 체크포인트 경로")
     args = parser.parse_args()
@@ -447,6 +451,8 @@ def main():
     config.epochs = args.epochs
     config.learning_rate = args.lr
     config.pooling_mode = args.pooling_mode
+    config.patience = args.patience
+    config.temperature = args.temperature
     
     if args.checkpoint:
         config.pretrained_checkpoint = args.checkpoint

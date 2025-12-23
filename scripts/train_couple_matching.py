@@ -440,6 +440,8 @@ def main():
                         help="Early stopping patience (기본: 10)")
     parser.add_argument("--temperature", type=float, default=0.1,
                         help="InfoNCE loss temperature (기본: 0.1)")
+    parser.add_argument("--projection-dim", type=int, default=256,
+                        help="Projection Head 출력 차원 (기본: 256)")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="사전학습 체크포인트 경로")
     args = parser.parse_args()
@@ -453,6 +455,7 @@ def main():
     config.pooling_mode = args.pooling_mode
     config.patience = args.patience
     config.temperature = args.temperature
+    config.projection_output_dim = args.projection_dim
     
     if args.checkpoint:
         config.pretrained_checkpoint = args.checkpoint

@@ -1,53 +1,61 @@
 \section{실험 및 결과}
 
-백본 모델로 Qwen3-VL-2B를 사용하며, 과적합 방지를 위해 백본의 모든 파라미터를 동결하였다. 학습 환경은 AWS SageMaker의 NVIDIA A10G GPU(24GB)를 사용하였으며, 배치 크기는 GPU 메모리 제약에 따라 48$\sim$64쌍으로 설정하였다. 학습률은 5e-5로 시작하여 CosineAnnealing 스케줄러를 적용하였으며, Weight Decay는 1e-3으로 L2 정규화를 강화하였다. 총 30 에폭 동안 학습하며 Early Stopping(patience=10)을 적용하여 과적합을 방지하였다.
+백본 모델로 Qwen3-VL-2B를 사용하며, 과적합 방지를 위해 백본의 모든 파라미터를 동결하였다. 학습 환경은 AWS SageMaker의 NVIDIA A10G GPU(24GB)를 사용하였다. 학습률 5e-5, 배치 크기 48쌍, Temperature($\tau$) 0.1, Weight Decay 1e-3으로 설정하였으며, 최대 30 에폭까지 학습하고 Early Stopping을 적용하였다.
+
+제안 모델의 효과를 검증하기 위해, 프로젝션 헤드 없이 사전 학습된 Qwen3-VL의 원본 임베딩(2048차원)을 직접 사용하는 베이스라인과 비교하였다. 표 \ref{tab:baseline}은 테스트 세트(75쌍)에서 양방향 평균 성능을 나타낸다.
 
 \begin{table}[h]
 \centering
-\caption{학습 하이퍼파라미터 설정}
-\label{tab:hyperparams}
-\begin{tabular}{ccc}
+\caption{베이스라인 vs 제안 모델 성능 비교}
+\label{tab:baseline}
+\begin{tabular}{cccccc}
 \toprule
-\textbf{파라미터} & \textbf{값} & \textbf{설정 근거} \\
+\textbf{모델} & \textbf{R@5} & \textbf{R@10} & \textbf{R@20} & \textbf{R@50} & \textbf{MRR} \\
 \midrule
-Backbone & Qwen3-VL-2B & 동결 (과적합 방지) \\
-Batch Size & 48$\sim$64쌍 & A10G 24GB 최적화 \\
-Learning Rate & 5e-5 & CosineAnnealing \\
-Temperature ($\tau$) & 0.1 & 실험적 최적값 \\
-Weight Decay & 1e-3 & L2 정규화 강화 \\
-Epochs & 30 & Early Stopping \\
+Random & 6.7\% & 13.3\% & 26.7\% & 66.7\% & 0.040 \\
+Pre-trained & 11.3\% & 18.7\% & 30.0\% & 72.7\% & 0.082 \\
+\textbf{Fine-tuned} & \textbf{29.3\%} & \textbf{37.3\%} & \textbf{50.0\%} & \textbf{82.0\%} & \textbf{0.216} \\
+향상률 & 2.59배 & 1.99배 & 1.67배 & 1.13배 & 2.63배 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-제안 모델의 효과를 검증하기 위해, 프로젝션 헤드 없이 사전 학습된 Qwen3-VL의 원본 임베딩을 직접 사용하는 베이스라인과 비교하였다. 평가 지표로는 Recall@K와 MRR(Mean Reciprocal Rank)을 사용하였다. Recall@K는 쿼리 이미지에 대해 상위 K개의 검색 결과 내에 실제 매칭 상대가 포함될 확률을 나타내며, MRR은 정답의 평균 역순위를 측정한다. 표 \ref{tab:baseline}은 Test 세트(124쌍)에서 양방향(Female$\leftrightarrow$Male) 평균 성능을 나타낸다.
+제안 모델은 베이스라인 대비 R@5에서 2.59배, MRR에서 2.63배 향상된 성능을 달성하여, 도메인 특화 프로젝션 헤드 학습의 효과를 명확히 입증하였다.
+
+VLM의 Hidden States에서 단일 임베딩 벡터를 추출하기 위해 EOS Token Pooling과 Mean Pooling 두 가지 전략을 비교하였다. 표 \ref{tab:pooling}은 각 Pooling 전략의 베이스라인 성능을 나타낸다.
 
 \begin{table}[h]
 \centering
-\caption{베이스라인 vs 제안 모델 성능 비교 (양방향 평균)}
-\label{tab:baseline}
+\caption{Pooling 전략별 베이스라인 성능 비교}
+\label{tab:pooling}
 \begin{tabular}{ccccc}
 \toprule
-\textbf{모델} & \textbf{R@1} & \textbf{R@5} & \textbf{R@10} & \textbf{MRR} \\
+\textbf{Pooling} & \textbf{R@5} & \textbf{R@10} & \textbf{R@20} & \textbf{MRR} \\
 \midrule
-Random Baseline & 0.65\% & 3.23\% & 6.45\% & 0.032 \\
-Qwen3-VL (Pre-trained) & 0.81\% & 3.63\% & 9.68\% & 0.044 \\
-\textbf{Proposed (Fine-tuned)} & \textbf{1.69\%} & \textbf{7.85\%} & \textbf{14.98\%} & \textbf{0.062} \\
-\midrule
-향상률 (vs Pre-trained) & +109\% & +116\% & +55\% & +41\% \\
+EOS Token & 8.0\% & 14.0\% & 29.3\% & 0.069 \\
+Mean Pooling & \textbf{11.3\%} & \textbf{18.7\%} & \textbf{30.0\%} & \textbf{0.082} \\
+향상률 & 1.41배 & 1.34배 & 1.02배 & 1.19배 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-사전 학습된 Qwen3-VL 베이스라인은 랜덤 기준(0.65\%) 대비 R@1에서 25\% 향상된 0.81\%를 보였다. 이는 VLM의 일반적인 시각적 특징 추출 능력이 커플 매칭 태스크에 일부 유효함을 시사한다. 그러나 제안 모델은 베이스라인 대비 R@1에서 109\%, R@5에서 116\% 향상된 성능을 달성하여, 도메인 특화 프로젝션 헤드 학습의 효과를 명확히 입증하였다.
+Mean Pooling이 EOS Token 대비 R@5에서 1.41배, MRR에서 1.19배 높은 성능을 보여, 이후 모든 실험에서 Mean Pooling을 기본 전략으로 채택하였다.
 
-과적합 억제를 위한 하이퍼파라미터 튜닝 과정에서 주요 인사이트를 도출하였다. 그림 \ref{fig:tuning}은 4가지 실험 설정에 따른 R@1 성능 변화를 보여준다.
+최적의 모델 성능을 확보하기 위해 주요 하이퍼파라미터에 대한 실험을 수행하였다. 표 \ref{tab:tuning}은 프로젝션 차원과 Temperature 변화에 따른 성능 변화를 보여준다.
 
-\begin{figure}[h]
+\begin{table}[h]
 \centering
-\includegraphics[width=0.9\columnwidth]{figures/hyperparameter_tuning.png}
-\caption{하이퍼파라미터 튜닝에 따른 R@1 성능 변화. 최종 설정(Exp4)에서 초기 대비 117\% 향상을 달성하였다.}
-\label{fig:tuning}
-\end{figure}
+\caption{하이퍼파라미터 튜닝 결과}
+\label{tab:tuning}
+\begin{tabular}{cccccc}
+\toprule
+\textbf{설정} & \textbf{R@5} & \textbf{R@10} & \textbf{R@20} & \textbf{R@50} & \textbf{MRR} \\
+\midrule
+기본 (dim=256) & 25.3\% & 36.7\% & 43.3\% & 74.7\% & 0.195 \\
+dim=512 & \textbf{29.3\%} & 36.7\% & 49.3\% & 78.0\% & \textbf{0.237} \\
+$\tau$=0.2 & 29.3\% & \textbf{37.3\%} & \textbf{50.0\%} & \textbf{82.0\%} & 0.216 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-실험 결과, 소규모 데이터셋(775쌍)에서 Dropout(0.3)은 오히려 성능을 저하시켰으며(MRR 0.047$\rightarrow$0.045), 이는 제한된 학습 신호를 더욱 약화시키기 때문으로 분석된다. 반면 Temperature를 0.07에서 0.1로 완화하자 R@1이 0.78\%에서 1.49\%로 크게 향상되었다. 최종적으로 Learning Rate 감소(1e-4$\rightarrow$5e-5)와 Weight Decay 증가(1e-4$\rightarrow$1e-3)를 조합하여 R@1 1.69\%, MRR 0.062의 최고 성능을 달성하였다.
+프로젝션 차원을 512로 증가시킨 경우 MRR이 0.237로 향상되었으며, Temperature를 0.2로 완화한 경우 R@50이 82.0\%로 크게 향상되어 일반화 성능 향상에 효과적임을 확인하였다.

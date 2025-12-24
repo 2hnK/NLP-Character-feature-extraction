@@ -62,7 +62,7 @@ class CoupleEvalConfig:
     # 평가 설정
     batch_size: int = 1  # 메모리 안전
     image_size: int = 768
-    k_values: List[int] = field(default_factory=lambda: [5, 10, 20, 50])
+    k_values: List[int] = field(default_factory=lambda: [5, 10, 20, 30, 50])
     
     # 출력
     output_dir: str = "./finetuned_evaluation_results"

@@ -59,7 +59,7 @@ class EvalConfig:
     # 평가 설정
     batch_size: int = 16
     image_size: int = 768
-    k_values: List[int] = field(default_factory=lambda: [5, 10, 20, 50])
+    k_values: List[int] = field(default_factory=lambda: [5, 10, 20, 30, 50])
     
     # 출력
     output_dir: str = "./baseline_evaluation_results"
@@ -135,7 +135,7 @@ class CoupleDataset:
 
 
 def compute_recall_and_mrr(female_embs: np.ndarray, male_embs: np.ndarray, 
-                            k_values: List[int] = [1, 5, 10, 20, 50]):
+                            k_values: List[int] = [1, 5, 10, 20, 30, 50]):
     """
     양방향 Recall@K 및 MRR 계산
     
@@ -251,7 +251,7 @@ def evaluate_baseline(backbone, dataset: CoupleDataset, device: str,
     logger.info(f"Embeddings shape: {all_female_embs.shape}")
     
     # Recall@K, MRR 계산
-    k_values = [1, 5, 10, 20, 50]
+    k_values = [1, 5, 10, 20, 30, 50]
     metrics = compute_recall_and_mrr(all_female_embs, all_male_embs, k_values)
     
     return metrics
@@ -266,7 +266,7 @@ def print_results(metrics: dict, n_couples: int):
     print(f"데이터: {n_couples} couples")
     print()
     
-    k_values = [5, 10, 20, 50]
+    k_values = [5, 10, 20, 30, 50]
     
     # Female → Male
     print("📊 Female → Male 검색:")
